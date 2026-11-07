@@ -127,7 +127,7 @@ it("records validation and repair HTTP failure separately without response bodie
     ["text", "invalid_response"],
     ["repair", "http_error"],
   ]);
-  expect(s.calls[0].diagnostic).toContain("results.0.id");
+  expect(s.calls[0].diagnostic).toContain("ASSESSMENT_IDS");
   expect(s.calls[0].usage).toBeTruthy();
   expect(JSON.stringify(s.calls)).not.toContain(privateText);
   await change((s) => {

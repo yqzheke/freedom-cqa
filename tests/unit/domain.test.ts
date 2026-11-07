@@ -134,3 +134,123 @@ it.each([
   ];
   expect(calculate(r, a).score).toBe(expected);
 });
+
+it("rejects a quoted multi-message range for NA, without weakening valid range evidence", () => {
+  const d = seed().docs[0].data;
+  const c = official.criteria[2];
+  const f: Finding = {
+    id: c.id,
+    status: "na",
+    answer: null,
+    critical: false,
+    reason: "Synthetic identification condition",
+    evidence: [{ from: 1, to: 2, quote: d.transcript[0].text, expected: "" }],
+  };
+  expect(() => validateEvidence(d, c, f)).toThrow("EVIDENCE_QUOTE_RANGE");
+  const before = structuredClone(f);
+  try {
+    validateEvidence(d, c, f);
+  } catch (error) {
+    expect(String(error)).toContain("from=to");
+    expect(String(error)).not.toContain(d.transcript[0].text);
+  }
+  expect(f).toEqual(before);
+  f.evidence = [
+    {
+      from: 1,
+      to: 2,
+      quote: "",
+      expected: "Checked whether identification was required",
+    },
+  ];
+  expect(() => validateEvidence(d, c, f)).not.toThrow();
+  f.evidence = d.transcript.map((m, i) => ({
+    from: i + 1,
+    to: i + 1,
+    quote: m.text,
+    expected: "",
+  }));
+  expect(() => validateEvidence(d, c, f)).not.toThrow();
+  f.evidence[0].quote = "fabricated quote";
+  expect(() => validateEvidence(d, c, f)).toThrow("Цитата не найдена");
+  f.evidence = [{ from: 1, to: 2, quote: "", expected: "" }];
+  expect(() => validateEvidence(d, c, f)).toThrow(
+    "Не указано ожидаемое действие",
+  );
+});
+
+it("distinguishes a wrong message number from an invented quote without leaking text", () => {
+  const d = structuredClone(seed().docs[0].data);
+  d.transcript[0].text = "private first fixture";
+  d.transcript[1].text = "private second fixture";
+  const c = official.criteria[2];
+  const f: Finding = {
+    id: c.id,
+    status: "na",
+    answer: null,
+    critical: false,
+    reason: "fixture",
+    evidence: [{ from: 1, to: 1, quote: d.transcript[1].text, expected: "" }],
+  };
+  const original = structuredClone(f);
+  try {
+    validateEvidence(d, c, f);
+    throw Error("Expected rejection");
+  } catch (error) {
+    expect(String(error)).toContain("EVIDENCE_QUOTE_NOT_FOUND");
+    expect(String(error)).toContain("declared=1; exactMatches=2");
+    expect(String(error)).not.toContain("private");
+  }
+  expect(f).toEqual(original);
+  f.evidence[0].quote = "invented fixture";
+  expect(() => validateEvidence(d, c, f)).toThrow("exactMatches=none");
+  f.evidence[0] = { from: 2, to: 2, quote: d.transcript[1].text, expected: "" };
+  expect(() => validateEvidence(d, c, f)).not.toThrow();
+});
+
+it.each(["demo-RU", "demo-EN", "demo-KZ"])(
+  "requires an explained inspected range for absent severe violations in %s",
+  (id) => {
+    const d = seed().docs.find((d) => d.id === id)!.data;
+    const c = official.criteria.find((c) => c.id === "severe")!;
+    const f: Finding = {
+      id: c.id,
+      status: "applicable",
+      answer: false,
+      critical: false,
+      reason: "Synthetic absence fixture",
+      evidence: [{ from: 1, to: d.transcript.length, quote: "", expected: "" }],
+    };
+    const before = structuredClone(f);
+    expect(() => validateEvidence(d, c, f)).toThrow(
+      "EVIDENCE_RANGE_EXPLANATION_REQUIRED",
+    );
+    expect(f).toEqual(before);
+    f.evidence[0].expected =
+      "Inspected the range for insults, unauthorized paid services and confidential disclosure; none found";
+    expect(() => validateEvidence(d, c, f)).not.toThrow();
+    // A permitted NA is distinct from review and does not leave the total unresolved.
+    const answers = findings();
+    const consult = answers.find((a) => a.id === "consult")!;
+    consult.status = "na";
+    consult.answer = null;
+    consult.evidence = [
+      {
+        from: 1,
+        to: d.transcript.length,
+        quote: "",
+        expected: "Chat ended before a request was formulated",
+      },
+    ];
+    expect(() =>
+      validateEvidence(
+        d,
+        official.criteria.find((c) => c.id === "consult")!,
+        consult,
+      ),
+    ).not.toThrow();
+    expect(calculate(official, answers).score).not.toBeNull();
+    consult.status = "review";
+    expect(calculate(official, answers).score).toBeNull();
+  },
+);

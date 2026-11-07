@@ -1,12 +1,29 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { recoverQueueState } from "../lib/queue-recovery";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import { TranscriptEditor } from "./transcript-editor";
+import { transcriptDialogue } from "../lib/transcripts";
 import { Observations } from "./observations";
+import { SubmissionExport } from "./submission-export";
+import { groqModel } from "../lib/groq-models";
+import { WeightSimulator } from "./weight-simulator";
 import { ControlGroup } from "./control-group";
 import { ReviewPanel } from "./review-panel";
 import { recommendations } from "../lib/review";
 import { Editor } from "./editor";
 import { calculate, type Finding, type Criterion } from "../lib/domain";
 import type { State } from "../lib/store";
+const icons: Record<string, string> = {
+  "Диалоги": "M4 4h16v12H9l-5 4V4Z",
+  "Чек-листы": "M9 5h11M9 12h11M9 19h11M3 5l1 1 2-2M3 12l1 1 2-2M3 19l1 1 2-2",
+  "Апелляции": "M12 3 2 8l10 5 10-5-10-5ZM5 11v6l7 4 7-4v-6",
+  "Запуски": "m9 5 10 7-10 7V5Z",
+};
+function NavIcon({ name }: { name: string }) {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={icons[name] || icons["Диалоги"]} /></svg>;
+}
+const statusLabel = (value?: string) => ({ completed: "Оценён", failed: "Ошибка", queued: "В очереди", running: "Обработка", cancelled: "Отменён" }[value ?? ""] || "Без оценки");
+const speakerLabel: Record<string, string> = { client: "Клиент", operator: "Оператор", bot: "Бот", system: "Система" };
 async function post(body: unknown) {
   const r = await fetch("/api/workspace", {
     method: "POST",
@@ -107,14 +124,16 @@ function Answer({
 }
 export default function Workspace() {
   const [s, set] = useState<
-      (State & { textProvider: "gemini" | "groq" }) | null
+      (State & { textProvider: "gemini" | "groq"; textModel?: string }) | null
     >(null),
     [tab, nav] = useState("Диалоги"),
     [doc, select] = useState(""),
+    [transcriptSelection, setTranscriptSelection] = useState<{doc:string;id:string}>({doc:"",id:""}),
     [ver, version] = useState(""),
     [q, search] = useState(""),
     [lang, language] = useState(""),
     [channel, setChannel] = useState(""),
+    [onlyCritical, setOnlyCritical] = useState(false),
     [msg, notice] = useState(""),
     [group, groupId] = useState("DEV"),
     [json, paste] = useState(""),
@@ -145,15 +164,21 @@ export default function Workspace() {
       s?.runs.find((x) => x.status === "queued"));
   useEffect(() => {
     if (!next) return;
+    let cancelled = false;
+    let stopRecovery: (() => void) | undefined;
     const timer = setTimeout(
       () => {
         post({ op: "step", id: next.id })
           .then(refresh)
-          .catch((e) => notice(e.message));
+          .catch((e) => {
+            if (cancelled) return;
+            notice(e.message);
+            stopRecovery = recoverQueueState(refresh, (error) => notice(error instanceof Error ? error.message : "Connection interrupted"));
+          });
       },
-      next.status === "running" ? 2000 : 200,
+      next.status === "running" ? 2000 : Math.max(200, (next.nextAttemptAt ?? 0) - Date.now()),
     );
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); stopRecovery?.(); };
   }, [next, refresh]);
   async function act(body: unknown) {
     lock(true);
@@ -167,61 +192,79 @@ export default function Workspace() {
       lock(false);
     }
   }
+  const selectedTranscript = transcriptSelection.doc === doc ? transcriptSelection.id : "";
   const d = s?.docs.find((x) => x.id === doc),
     v = s?.versions.find((x) => x.id === ver),
     r = s?.runs.find(
       (x) =>
-        !x.review &&
+        !x.review && (x.transcriptRevision ?? "") === selectedTranscript &&
+        (x.textProvider !== "groq" || (x.textModel ?? groqModel) === s.textModel) &&
         (x.textProvider ?? "gemini") ===
           (d?.data.channel === "agent chat" ? s.textProvider : "gemini") &&
         x.doc === doc &&
         x.version === ver,
     ),
     total = v && r ? calculate(v.r, r.current) : null;
+  const displayedDialogue = s && d ? transcriptDialogue(s,d.id,selectedTranscript) : undefined;
   function evidence(from: number, to: number) {
     mark([from, to]);
     document
       .getElementById("m" + from)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
+  function listRun(id: string, dialogueChannel: string) {
+    return s?.runs.find(
+      (k) => !k.review && !k.transcriptRevision &&
+        (k.textProvider !== "groq" || (k.textModel ?? groqModel) === s.textModel) &&
+        (k.textProvider ?? "gemini") === (dialogueChannel === "agent chat" ? s.textProvider : "gemini") &&
+        k.doc === id && k.version === ver,
+    );
+  }
   const visible =
     s?.docs.filter(
       (x) =>
         (!lang || lang === x.data.language) &&
         (!channel || channel === x.data.channel) &&
+        (!onlyCritical || (!!v && calculate(v.r, listRun(x.id, x.data.channel)?.current ?? []).critical)) &&
         (x.group + " " + x.data.conversation_id)
           .toLowerCase()
           .includes(q.toLowerCase()),
     ) ?? [];
   return (
     <>
-      <header>
-        <b>
-          Freedom <span>/ CQA</span>
-        </b>
-        <nav>
-          {["Диалоги", "Чек-листы", "Апелляции", "Запуски"].map((k) => (
-            <button
-              aria-current={tab === k ? "page" : undefined}
-              key={k}
-              onClick={() => nav(k)}
-            >
-              {k}
+      <header className="app-sidebar">
+        <div className="brand">
+          <div className="brand-mark" aria-hidden="true">f<span>.</span></div>
+          <div><b>freedom<span>cqa</span></b><small>Качество в каждом диалоге</small></div>
+        </div>
+        <span className="nav-caption">РАБОЧЕЕ ПРОСТРАНСТВО</span>
+        <nav aria-label="Основная навигация">
+          {["Диалоги", "Чек-листы", "Симуляция", "Апелляции", "Запуски"].map((k) => (
+            <button aria-current={tab === k ? "page" : undefined} key={k} onClick={() => nav(k)}>
+              <NavIcon name={k} /><span>{k}</span>
             </button>
           ))}
         </nav>
+        <div className="sidebar-note"><span className="status-dot" />Локальное пространство<small>Проверяйте оценки.<br />Принимайте решения осознанно.</small></div>
+        <div className="sidebar-profile"><span className="avatar">QA</span><div><strong>Аналитик качества</strong><small>Рабочая сессия</small></div></div>
       </header>
       <main>
-        <h1>{tab}</h1>
+        <div className="page-topline"><span>Рабочее пространство <span className="breadcrumb-slash">/</span> {tab}</span><span className="workspace-badge"><span className="status-dot" /> Freedom CQA</span></div>
+        <div className="page-heading"><div><span className="eyebrow">CONVERSATION QUALITY</span><h1>{tab}</h1><p className="page-description">{{"Диалоги":"От разговора к понятной и проверяемой оценке.","Чек-листы":"Единые правила. Гибкие критерии. Прозрачный результат.","Апелляции":"Пересмотр с аргументами и сохранением истории.","Запуски":"Контроль обработки, версий и результатов."}[tab]}</p></div><span className="heading-symbol" aria-hidden="true"><NavIcon name={tab} /></span></div>
         {msg && (
-          <p role="status">
-            {msg} <button onClick={() => notice("")}>×</button>
+          <p className="notice" role="status">
+            {msg} <button aria-label="Закрыть уведомление" onClick={() => notice("")}>×</button>
           </p>
         )}
         {!s ? (
           <p>{msg ? "Проверьте доступ и обновите страницу." : "Загрузка…"}</p>
         ) : (
           <>
+            {tab === "Диалоги" && <div className="overview-strip">
+              <div><span className="overview-icon"><NavIcon name="Диалоги" /></span><div><small>В пространстве</small><strong>{s.docs.length} <span>диалогов</span></strong></div></div>
+              <div><span className="overview-icon"><NavIcon name="Чек-листы" /></span><div><small>В выбранном чек-листе</small><strong>{v?.r.criteria.length ?? 0} <span>критериев</span></strong></div></div>
+              <div><span className="overview-icon"><NavIcon name="Апелляции" /></span><div><small>Ждут решения</small><strong>{s.appeals.filter(a => !a.action).length} <span>апелляций</span></strong></div></div>
+            </div>}
             {v && (
               <label className="version">
                 Версия чек-листа
@@ -236,7 +279,7 @@ export default function Workspace() {
             )}
             {tab === "Диалоги" && (
               <>
-                <details>
+                <details className="import-panel">
                   <summary>Импортировать диалоги</summary>
                   <div className="bar">
                     <input
@@ -280,7 +323,8 @@ export default function Workspace() {
                   </button>
                 </details>
                 <div className="workspace">
-                  <aside>
+                  <aside className="dialogue-list" aria-label="Список диалогов">
+                    <div className="panel-title"><h2>Все диалоги</h2><span className="count-badge">{visible.length}</span></div>
                     <input
                       placeholder="Поиск по ID или набору"
                       value={q}
@@ -307,17 +351,14 @@ export default function Workspace() {
                         <option>voice call</option>
                       </select>
                     </div>
+                    <label>
+                      <input type="checkbox" checked={onlyCritical} onChange={(e) => setOnlyCritical(e.target.checked)} />
+                      Только с грубой ошибкой
+                    </label>
+                    {onlyCritical && <small>По выбранной версии чек-листа и текущему провайдеру, с учётом решений по апелляциям.</small>}
+                    {visible.length === 0 && <p role="status">Нет диалогов по выбранным фильтрам.</p>}
                     {visible.map((x) => {
-                      const run = s.runs.find(
-                        (k) =>
-                          !k.review &&
-                          (k.textProvider ?? "gemini") ===
-                            (x.data.channel === "agent chat"
-                              ? s.textProvider
-                              : "gemini") &&
-                          k.doc === x.id &&
-                          k.version === ver,
-                      );
+                      const run = listRun(x.id, x.data.channel);
                       const score =
                         run && v ? calculate(v.r, run.current) : null;
                       return (
@@ -329,14 +370,9 @@ export default function Workspace() {
                             mark([0, 0]);
                           }}
                         >
-                          <strong>{x.data.conversation_id}</strong>
-                          <small>
-                            {x.group} · {x.data.language} · {x.data.channel}
-                          </small>
-                          <small>
-                            {run?.status ?? "Без оценки"} {score?.score}{" "}
-                            {score?.critical ? "⚑" : ""}
-                          </small>
+                          <span className="item-heading"><strong>{x.data.conversation_id}</strong><span className="language-tag">{x.data.language}</span></span>
+                          <small>{x.group} · {x.data.channel === "voice call" ? "Звонок" : "Чат"}</small>
+                          <span className="item-footer"><span className={"status-pill status-" + (run?.status ?? "idle")}>{statusLabel(run?.status)}</span><span className={score?.critical ? "critical-text" : "item-score"}>{score?.score !== null && score?.score !== undefined ? score.score.toFixed(2) : ""}{score?.critical ? " ⚑" : ""}</span></span>
                         </button>
                       );
                     })}
@@ -352,13 +388,11 @@ export default function Workspace() {
                     </button>
                   </aside>
                   {d && (
-                    <section>
-                      <small>
-                        {d.group} / {d.data.language}
-                      </small>
-                      <h2>{d.data.conversation_id}</h2>
+                    <section className="transcript-panel">
+                      <div className="transcript-heading"><span className="eyebrow">АНАЛИЗ РАЗГОВОРА</span><h2>{d.data.conversation_id}</h2><div className="transcript-meta"><span>{d.data.channel === "voice call" ? "Звонок" : "Чат"}</span><span>{d.data.language}</span><span>{d.data.transcript.length} реплик</span></div></div>
                       {d.data.audio_url && (
-                        <>
+                        <div className="audio-card">
+                          <div className="audio-label"><NavIcon name="Запуски" /><strong>Запись разговора</strong></div>
                           <audio
                             controls
                             src={"/api/workspace?audio=" + doc}
@@ -367,11 +401,13 @@ export default function Workspace() {
                             }
                           />
                           <small>Синхронизация с текстом не проверена</small>
-                        </>
+                        </div>
                       )}
-                      {d.data.transcript.map((m, i) => (
+                      {d.data.channel === "voice call" && <TranscriptEditor key={d.id} doc={d} revisions={(s.transcriptRevisions ?? []).filter(x=>x.doc===d.id)} selected={selectedTranscript} choose={id=>{setTranscriptSelection({doc:d.id,id});mark([0,0]);}} save={act} busy={busy} />}
+                      {displayedDialogue!.transcript.map((m, i) => (
                         <article
                           id={"m" + (i + 1)}
+                          data-speaker={m.speaker}
                           key={i}
                           className={
                             highlight[0] <= i + 1 && highlight[1] >= i + 1
@@ -380,26 +416,26 @@ export default function Workspace() {
                           }
                         >
                           <small>
-                            #{i + 1} · {m.speaker} · {m.timestamp}
+                            <strong>{speakerLabel[m.speaker]}</strong><span>#{i + 1} · {m.timestamp}</span>
                           </small>
                           <p>{m.text}</p>
                         </article>
                       ))}
                     </section>
                   )}
-                  <section>
-                    <h2>Оценка оператора</h2>
-                    <small>
+                  <section className="evaluation-panel">
+                    <div className="panel-title"><h2>Оценка оператора</h2><span className="count-badge">{v?.r.criteria.length ?? 0}</span></div>
+                    <small className="provider-label">
                       {d?.data.channel === "agent chat" &&
                       s.textProvider === "groq"
-                        ? "Groq"
+                        ? "Groq / " + (s.textModel ?? groqModel)
                         : "Gemini"}
                     </small>
                     {!r ? (
                       <button
                         className="primary"
                         disabled={busy}
-                        onClick={() => act({ op: "start", doc, version: ver })}
+                        onClick={() => act({ op: "start", doc, version: ver, transcriptRevision: selectedTranscript || undefined })}
                       >
                         Запустить оценку
                       </button>
@@ -408,7 +444,7 @@ export default function Workspace() {
                         <p>
                           {r.status === "failed"
                             ? "Последняя попытка завершилась ошибкой."
-                            : r.status}{" "}
+                            : statusLabel(r.status)}{" "}
                           {r.error}
                         </p>
                         {["failed", "cancelled"].includes(r.status) &&
@@ -439,13 +475,13 @@ export default function Workspace() {
                         )}
                         {r.original.length > 0 && v && (
                           <>
-                            <strong className="score">
+                            <div className="score-summary"><div className="score-ring" style={{ "--score": total?.score ?? 0 } as CSSProperties}><div><small>ИТОГОВАЯ ОЦЕНКА</small><strong className="score">
                               {v.r.digits === 2
                                 ? (total?.score?.toFixed(2) ?? "—")
                                 : (total?.score ?? "—")}{" "}
                               / 100
-                            </strong>
-                            <p>
+                            </strong></div></div><p className={total?.critical ? "critical-banner" : "quality-caption"}>{total?.critical ? "Обнаружена грубая ошибка" : total?.score === null ? "Требуется проверка" : "Оценка по выбранному чек-листу"}</p></div>
+                            <p className="score-comparison">
                               Исходная оценка:{" "}
                               {v.r.digits === 2
                                 ? (calculate(v.r, r.original).score?.toFixed(
@@ -466,11 +502,11 @@ export default function Workspace() {
                               ),
                             )}
                             {d &&
-                              recommendations(v.r, r.current, d.data).length >
+                              recommendations(v.r, r.current, displayedDialogue!).length >
                                 0 && (
-                                <section>
-                                  <h3>Рекомендации оператору</h3>
-                                  {recommendations(v.r, r.current, d.data).map(
+                                <details className="recommendation-panel">
+                                  <summary><h3>Рекомендации оператору</h3></summary>
+                                  {recommendations(v.r, r.current, displayedDialogue!).map(
                                     (t) => (
                                       <article key={t.id}>
                                         <strong>{t.title}</strong>
@@ -490,7 +526,7 @@ export default function Workspace() {
                                       </article>
                                     ),
                                   )}
-                                </section>
+                                </details>
                               )}
                             {r.current.map((f, i) => {
                               const c = v.r.criteria.find(
@@ -498,12 +534,10 @@ export default function Workspace() {
                                 )!,
                                 row = total?.details.find((x) => x.id === f.id);
                               return (
-                                <article key={f.id}>
-                                  <h3>{c.title}</h3>
-                                  <b>
-                                    {f.status === "applicable"
-                                      ? String(f.answer)
-                                      : f.status.toUpperCase()}{" "}
+                                <article className={"criterion-card" + (f.critical ? " is-critical" : "")} key={f.id}>
+                                  <div className="criterion-heading"><span className="criterion-number">{i + 1 < 10 ? "0" : ""}{i + 1}</span><h3>{c.title}</h3></div>
+                                  <b className={"answer-pill answer-" + (f.status !== "applicable" ? f.status : f.answer === false ? "no" : "yes")}>
+                                    {f.status === "applicable" ? typeof f.answer === "boolean" ? f.answer ? "Да" : "Нет" : String(f.answer) : f.status === "na" ? "N/A" : "Нужна проверка"}{" "}
                                     {f.critical ? "· Критическая ошибка" : ""}
                                   </b>
                                   <p>{f.reason}</p>
@@ -558,6 +592,7 @@ export default function Workspace() {
                 </div>
               </>
             )}
+            {tab === "Симуляция" && v && <WeightSimulator key={v.id} state={s} version={v} />}
             {tab === "Чек-листы" && v && (
               <Editor
                 key={v.id}
@@ -646,6 +681,7 @@ export default function Workspace() {
                     state={s}
                     version={v}
                     provider={s.textProvider}
+                    model={s.textModel}
                     busy={busy}
                     act={act}
                     open={(id) => {
@@ -654,6 +690,7 @@ export default function Workspace() {
                     }}
                   />
                 )}
+                {v && <SubmissionExport state={s} version={v} provider={s.textProvider} model={s.textModel} />}
                 {s.queuePause && (
                   <article role="status">
                     <p>{s.queuePause}</p>

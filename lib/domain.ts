@@ -106,6 +106,8 @@ export const finding = z.object({
       to: z.number().int(),
       quote: z.string(),
       expected: z.string(),
+      quoteSource: z.literal("message_reference").optional(),
+      purpose: z.literal("context").optional(),
     }),
   ),
 });
@@ -166,24 +168,70 @@ export function normalized(c: Criterion, f: Finding) {
 }
 export function validateEvidence(d: Dialogue, c: Criterion, f: Finding) {
   normalized(c, f);
-  if (
-    f.id !== c.id ||
-    (!f.evidence.length && f.status === "applicable" && c.source !== "audio")
-  )
-    throw Error("Нет доказательства");
+  if (f.id !== c.id)
+    throw Error("EVIDENCE_CRITERION_ID: Finding ID does not match criterion");
+  if (!f.evidence.length && (f.status === "applicable" || f.status === "na") && c.source !== "audio")
+    throw Error(
+      "EVIDENCE_REQUIRED: Нет доказательства. Every applicable or NA answer including false or zero needs evidence. For an absent action provide the inspected message range, quote empty and nonempty expected describing the missing action. Never invent a quote.",
+    );
+  const hasOperatorQuote = f.evidence.some((e) => {
+    const message = d.transcript[e.from - 1];
+    return (
+      !e.purpose &&
+      e.from === e.to &&
+      !!e.quote &&
+      !!message &&
+      ["operator", "system"].includes(message.speaker) &&
+      message.text.includes(e.quote)
+    );
+  });
   for (const e of f.evidence) {
     const m = d.transcript[e.from - 1];
     if (!m || e.to < e.from || e.to > d.transcript.length)
       throw Error("Неверный диапазон");
+    if (
+      e.quoteSource === "message_reference" &&
+      (e.from !== e.to || !e.quote.trim() || e.quote !== m.text)
+    )
+      throw Error(
+        "EVIDENCE_REFERENCE_TEXT: referenced evidence must preserve the entire source message exactly",
+      );
+    if (
+      e.purpose === "context" &&
+      (!e.quote || e.from !== e.to || m.speaker !== "client")
+    )
+      throw Error(
+        "EVIDENCE_CONTEXT_ROLE: context must select one exact client message, never replace operator evidence",
+      );
     if (e.quote) {
       if (e.from !== e.to)
-        throw Error("Цитата должна ссылаться на одну реплику");
-      if (f.status !== "na" && !["operator", "system"].includes(m.speaker))
-        throw Error("Источник цитаты не подтверждает действие оператора");
+        throw Error(
+          "EVIDENCE_QUOTE_RANGE: Цитата должна ссылаться на одну реплику (from=to). Для нескольких цитат нужны отдельные элементы; для проверенного диапазона quote должен быть пустым, expected — объяснять проверенное условие",
+        );
+      if (
+        f.status !== "na" &&
+        !["operator", "system"].includes(m.speaker) &&
+        !(e.purpose === "context" && hasOperatorQuote)
+      )
+        throw Error(
+          "Источник цитаты не подтверждает действие оператора. EVIDENCE_CONTEXT_PAIR_REQUIRED: client context needs purpose=context and a separate exact operator or system quote in the same finding",
+        );
       if (!m.text.includes(e.quote))
-        throw Error("Цитата не найдена в указанной реплике");
+        throw Error(
+          "EVIDENCE_QUOTE_NOT_FOUND: Цитата не найдена в указанной реплике; declared=" +
+            e.from +
+            "; exactMatches=" +
+            (d.transcript
+              .flatMap((message, index) =>
+                message.text.includes(e.quote) ? [index + 1] : [],
+              )
+              .join(",") || "none") +
+            ". Use messageNumber and copy an exact substring of that entry's text. Do not paraphrase or translate.",
+        );
     } else if (!e.expected.trim())
-      throw Error("Не указано ожидаемое действие для диапазона");
+      throw Error(
+        "EVIDENCE_RANGE_EXPLANATION_REQUIRED: Не указано ожидаемое действие для диапазона. When quote is empty, expected must describe the missing action, checked NA condition, or prohibited acts checked and not found. Do not invent evidence.",
+      );
   }
 }
 export function calculate(r: Rubric, answers: Finding[]) {

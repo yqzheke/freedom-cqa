@@ -1,5 +1,14 @@
-import { groupChats, groupProgress } from "../../../lib/control";
-import { configuredProvider, groqModel } from "../../../lib/groq";
+import { freeDialogueAllowed } from "../../../lib/dev-chat-authorization";
+import { rememberImport } from "../../../lib/imports";
+import { GroqPacingWait, nextGroqRequestAt } from "../../../lib/groq-pacing";
+import { saveTranscriptRevision, transcriptDialogue } from "../../../lib/transcripts";
+import { isDeepStrictEqual } from "node:util";
+import { buildSubmission } from "../../../lib/submission";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { batchDocuments, groupProgress } from "../../../lib/control";
+import { configuredProvider } from "../../../lib/groq";
+import { configuredGroqModel } from "../../../lib/groq-models";
 import {
   recordDecision,
   prepareReview,
@@ -62,6 +71,7 @@ export async function GET(req: NextRequest) {
       ...s,
       imports: undefined,
       textProvider: configuredProvider(),
+      textModel: configuredProvider() === "groq" ? configuredGroqModel() : undefined,
       docs: s.docs.map((d) => ({
         ...d,
         data: { ...d.data, audio_url: d.data.audio_url ? "available" : null },
@@ -100,6 +110,17 @@ export async function POST(req: NextRequest) {
       return res;
     }
     if (!access(req)) return error("Требуется ссылка доступа", 403);
+    if (b.op === "exportSubmission") {
+      const artifact = buildSubmission(await state(), b);
+      const relativePath = `results/${b.dataset}/results.json`;
+      if (b.save === true) {
+        if (!local(req)) return error("Сохранение в репозиторий доступно только локально", 403);
+        const target = path.join(process.cwd(), relativePath);
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+      }
+      return NextResponse.json({ artifact, path: relativePath, saved: b.save === true });
+    }
     if (b.op === "import") {
       let payload = b.payload;
       if (!payload) {
@@ -128,14 +149,10 @@ export async function POST(req: NextRequest) {
           if (!s.docs.some((x) => x.id === id))
             s.docs.push({ id, group: data.dataset_group_id, data: d });
         }
-        const digest = hash(payload);
-        if (!s.imports.some((i) => i.hash === digest))
-          s.imports.push({
-            group: data.dataset_group_id,
-            hash: digest,
-            raw: payload,
-          });
+        rememberImport(s, data.dataset_group_id, payload);
       });
+    } else if (b.op === "correctTranscript") {
+      await change(s => saveTranscriptRevision(s, {doc: b.doc, reason: b.reason, texts: b.texts}));
     } else if (b.op === "publish") {
       const r = rubric.parse(b.r);
       await change((s) => {
@@ -148,9 +165,9 @@ export async function POST(req: NextRequest) {
         if (!version) throw Error("Версия недоступна");
         const docs =
           b.op === "startGroup"
-            ? groupChats(s.docs, z.string().min(1).parse(b.group))
+            ? batchDocuments(s, z.string().min(1).parse(b.group), z.enum(["control", "dev", "prod"]).parse(b.dataset ?? "control"))
             : s.docs.filter((d) => d.id === b.doc);
-        if (!docs.length || docs.length > 10)
+        if (!docs.length || (b.op === "start" && docs.length !== 1))
           throw Error("Выберите группу из одного–десяти чатов");
         if (
           b.op === "startGroup" &&
@@ -159,12 +176,21 @@ export async function POST(req: NextRequest) {
           throw Error(
             "Для контроля выберите округление половина вверх до двух знаков",
           );
+        if (b.op === "startGroup" && docs.some(doc =>
+          (doc.data.channel === "agent chat" && configuredProvider() === "groq" ||
+           (doc.data.channel === "voice call" || configuredProvider() === "gemini") && process.env.GEMINI_BILLING_MODE === "free_only") &&
+          !freeDialogueAllowed(s, doc.data, doc.data.channel === "agent chat" ? configuredProvider() : "gemini", configuredProvider() === "groq" ? configuredGroqModel() : undefined, doc.id, b.transcriptRevision)))
+          throw Error("Реальные данные нельзя отправлять в текущий бесплатный API. Нужен согласованный режим обработки; группа не поставлена в очередь.");
+        if (b.op === "startGroup" && b.transcriptRevision) throw Error("Групповой запуск использует только оригиналы");
         for (const doc of docs) {
+          const transcriptRevision = b.transcriptRevision ? z.string().min(1).parse(b.transcriptRevision) : undefined;
+          transcriptDialogue(s, doc.id, transcriptRevision);
           const textProvider =
             doc.data.channel === "agent chat" ? configuredProvider() : "gemini";
+          const textModel = textProvider === "groq" ? configuredGroqModel() : undefined;
           if (
             b.op === "startGroup" &&
-            groupProgress([doc], s.runs, b.version, textProvider)[0].run
+            groupProgress([doc], s.runs, b.version, textProvider, textModel)[0].run
           )
             continue;
           const key = hash([
@@ -173,12 +199,15 @@ export async function POST(req: NextRequest) {
             process.env.GEMINI_TEXT_MODEL,
             process.env.GEMINI_AUDIO_MODEL,
             "v1",
-            ...(textProvider === "groq" ? ["groq", groqModel] : []),
+            ...(transcriptRevision ? ["transcript", transcriptRevision] : []),
+            ...(textProvider === "groq" ? ["groq", textModel] : []),
           ]);
           if (!s.runs.some((x) => x.key === key))
             s.runs.push({
               key,
+              transcriptRevision,
               textProvider,
+              textModel,
               id: crypto.randomUUID(),
               doc: doc.id,
               version: b.version,
@@ -214,12 +243,22 @@ export async function POST(req: NextRequest) {
           s.runs.some((x) => x.status === "running" && x.lease > Date.now())
         )
           return null;
+        if (r.textProvider === "groq") {
+          const until = nextGroqRequestAt(s.calls);
+          if (until > Date.now()) {
+            r.nextAttemptAt = until;
+            r.error = new GroqPacingWait(until).message;
+            return null;
+          }
+        }
+        delete r.nextAttemptAt;
+        r.error = "";
         r.status = "running";
         r.token = crypto.randomUUID();
         r.lease = Date.now() + 240000;
         return {
           token: r.token,
-          d: s.docs.find((x) => x.id === r.doc)!.data,
+          d: transcriptDialogue(s, r.doc, r.transcriptRevision),
           version: s.versions.find((x) => x.id === r.version)!.r,
         };
       });
@@ -243,6 +282,10 @@ export async function POST(req: NextRequest) {
             const r = s.runs.find((x) => x.id === b.id)!;
             if (r.token === claim.token) {
               r.status = r.cancel ? "cancelled" : "failed";
+              if (e instanceof GroqPacingWait && !r.cancel) {
+                r.status = "queued";
+                r.nextAttemptAt = e.until;
+              }
               if (s.queuePause && !r.cancel) r.status = "queued";
               r.error = s.queuePause ?? safe(e);
               if (r.review)

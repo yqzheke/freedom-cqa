@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { groupChats, groupProgress } from "../lib/control";
+import { groupDocuments, groupProgress } from "../lib/control";
 import { calculate } from "../lib/domain";
 import type { State, Version } from "../lib/store";
 export function ControlGroup({
   state,
   version,
   provider,
+  model,
   busy,
   act,
   open,
@@ -13,13 +14,15 @@ export function ControlGroup({
   state: State;
   version: Version;
   provider: string;
+  model?: string;
   busy: boolean;
   act: (body: unknown) => Promise<void>;
   open: (id: string) => void;
 }) {
   const [group, setGroup] = useState("");
-  const docs = groupChats(state.docs, group),
-    items = groupProgress(docs, state.runs, version.id, provider);
+  const [dataset, setDataset] = useState("control");
+  const docs = groupDocuments(state.docs, group, dataset === "dev"),
+    items = groupProgress(docs, state.runs, version.id, provider, model);
   const missing = items.filter((i) => !i.run).length;
   const finished = items.filter((i) => i.run?.status === "completed").length;
   function download() {
@@ -51,7 +54,7 @@ export function ControlGroup({
     <details>
       <summary>Контрольная группа</summary>
       <label>
-        Набор чатов
+        Набор диалогов
         <select value={group} onChange={(e) => setGroup(e.target.value)}>
           <option value="">Выберите набор</option>
           {[...new Set(state.docs.map((d) => d.group))].map((g) => (
@@ -59,14 +62,16 @@ export function ControlGroup({
           ))}
         </select>
       </label>
+      <label>Режим группы<select aria-label="Режим группы" value={dataset} onChange={e=>setDataset(e.target.value)}><option value="control">Контроль — до 10 чатов</option><option value="dev">DEV — 60 чатов и 5 звонков</option><option value="prod">PROD — 10 чатов</option></select></label>
+      <p>Звонки обрабатываются Gemini. Ограничения квоты и запрет передачи реальных данных в неподходящий бесплатный API сохраняются. Переоценка: выберите новую версию чек-листа и запустите тот же набор.</p>
       {group && (
         <>
           <p>
             {version.r.name} · {provider} · завершено {finished} из{" "}
             {docs.length}
           </p>
-          {docs.length > 10 && (
-            <p>Для контрольной группы допускается до 10 чатов.</p>
+          {docs.length > (dataset === "dev" ? 65 : 10) && (
+            <p>Выберите подходящий этап: контроль до 10, DEV 65, PROD 10.</p>
           )}
           {(version.r.round !== "nearest" || version.r.digits !== 2) && (
             <p>Выберите версию с округлением половина вверх до двух знаков.</p>
@@ -76,12 +81,12 @@ export function ControlGroup({
               busy ||
               !!state.queuePause ||
               !missing ||
-              docs.length > 10 ||
+              docs.length > (dataset === "dev" ? 65 : 10) ||
               version.r.round !== "nearest" ||
               version.r.digits !== 2
             }
             onClick={() =>
-              act({ op: "startGroup", group, version: version.id })
+              act({ op: "startGroup", group, version: version.id, dataset })
             }
           >
             Поставить в очередь по выбранной версии ({missing})
@@ -90,7 +95,7 @@ export function ControlGroup({
             disabled={!docs.length || finished !== docs.length}
             onClick={download}
           >
-            Скачать оценки по критериям
+            Скачать внутренние оценки (не для сдачи)
           </button>
           {state.queuePause && <p>{state.queuePause}</p>}
           {items.map(({ doc, run }) => (

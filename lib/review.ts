@@ -57,7 +57,9 @@ export function prepareReview(s: State, a: Appeal) {
   const job: Run = {
     id: crypto.randomUUID(),
     doc: parent.doc,
+    transcriptRevision: parent.transcriptRevision,
     textProvider: parent.textProvider ?? "gemini",
+    textModel: parent.textModel,
     version: parent.version,
     key: "appeal-" + a.id,
     status: "awaiting_permission",

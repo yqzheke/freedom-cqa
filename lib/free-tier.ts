@@ -1,4 +1,5 @@
 import type { State } from "./store";
+import { isGroqModel } from "./groq-models";
 
 export const quotaMessage =
   "Очередь приостановлена: Gemini вернул HTTP 429. Проверьте квоту перед возобновлением.";
@@ -11,7 +12,7 @@ export function freePolicy(
   if (provider === "groq") {
     const cap = Number(process.env.GROQ_FREE_REQUESTS_PER_DAY ?? 3);
     if (
-      model !== "qwen/qwen3.8-27b" ||
+      !isGroqModel(model) ||
       process.env.MAX_CALL_USD !== "0" ||
       process.env.EVALUATION_BUDGET_USD !== "0" ||
       !Number.isSafeInteger(cap) ||

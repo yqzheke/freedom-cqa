@@ -114,7 +114,7 @@ test("displays all eight official criterion answers and opens their supporting m
       .filter({
         has: page.getByRole("heading", { name: c.title, exact: true }),
       });
-    await expect(panel.locator("b")).toContainText(String(rows[i].answer));
+    await expect(panel.locator("b")).toContainText(typeof rows[i].answer === "boolean" ? rows[i].answer ? "Да" : "Нет" : String(rows[i].answer));
     await panel.getByRole("button", { name: /#2/ }).click();
     await expect(page.locator("#m2")).toHaveClass("highlight");
   }

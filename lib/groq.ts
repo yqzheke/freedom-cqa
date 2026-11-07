@@ -1,9 +1,11 @@
+import { explanationLanguage } from "./output-language";
 import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { z } from "zod";
 import { groqFailure } from "./groq-wire";
 import { ValidationFailure } from "./diagnostics";
-export const groqModel = "qwen/qwen3.8-27b";
+export { groqModel } from "./groq-models";
+import { groqReasoning } from "./groq-models";
 export function configuredProvider(): "gemini" | "groq" {
   const provider = process.env.TEXT_EVALUATION_PROVIDER ?? "gemini";
   if (provider !== "gemini" && provider !== "groq")
@@ -58,12 +60,14 @@ export async function groqText(
           role: "system",
           content:
             instruction +
-            "\nReturn exactly one JSON object with a results array. Each result must have id, status, answer, reason, critical and evidence. Each evidence item must have integer from and to (one-based inclusive), string quote and string expected. Use the supplied criterion mappings and allowedStatuses. Return no markdown.",
+            '\nReturn exactly one JSON object with a results array. Each result must have id, status, answer, reason, critical and evidence. For supporting quotation evidence, prefer an explicit whole-message reference: {"kind":"message","messageNumber":2}. Choose the exact supplied messageNumber that supports this finding; the server will quote that entire source message verbatim and check its role. A reference item contains kind and messageNumber, with optional purpose="context" only for a client reply used as supporting context. Never include quote/from/to/expected in a reference. For client context, include a separate exact operator or system quotation/reference in the same finding: a client reply alone does not establish operator action. This permits citing both an operator clarification and the client reply, or an unclear operator answer and the client request to clarify; explain the connection without inventing it. This is an alternative representation to the quote instructions above, not permission to cite an unrelated message. For inspected ranges showing an absent act or NA condition, use integer from and to (one-based inclusive), quote="", and nonempty expected. Legacy exact-quote items with from=to, quote and expected remain supported but are never fuzzy-matched or corrected. Never output quoteSource; that provenance field is assigned by the server. Use the supplied criterion mappings and allowedStatuses. Return compact JSON, no markdown, comments, trailing commas, or text outside the object. Keep each reason and expected explanation to one short sentence, and quote only the shortest sufficient exact substring. Escape double quotes and line breaks inside JSON strings. Do not repeat the input rubric or transcript. Example of the shape only (replace every placeholder and assess every supplied criterion): {"results":[{"id":"criterion-id","status":"applicable","answer":false,"reason":"Обязательное действие отсутствует","critical":false,"evidence":[{"from":1,"to":2,"quote":"","expected":"Ожидалось обязательное действие"}]}]}' +
+            "\n" +
+            explanationLanguage,
         },
         { role: "user", content: input },
       ],
       max_completion_tokens: 3000,
-      reasoning_format: "hidden",
+      ...groqReasoning(model),
       response_format: { type: "json_object" },
     }),
   });

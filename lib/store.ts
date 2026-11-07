@@ -15,10 +15,14 @@ export const hash = (o: unknown) =>
 export type Doc = { id: string; group: string; data: Dialogue };
 export type Version = { id: string; r: Rubric };
 export type Run = {
+  nextAttemptAt?: number;
+  transcriptRevision?: string;
   textProvider?: "gemini" | "groq";
+  textModel?: string;
   review?: import("./review").Reassessment;
   reviewRevision?: number;
   repairReason?: string;
+  repairDraft?: import("./assessment-validation").AssessmentDraft;
   attempt?: number;
   audio?: {
     observations: string;
@@ -55,6 +59,7 @@ export type Appeal = {
   revision: number;
 };
 export type Call = {
+  pacingUntil?: number;
   provider?: "gemini" | "groq";
   attempt?: number;
   stage?: "text" | "repair" | "audio";
@@ -73,6 +78,7 @@ export type Call = {
   request?: string;
 };
 export type State = {
+  transcriptRevisions?: import("./transcripts").TranscriptRevision[];
   queuePause?: string;
   queueRetryAt?: number;
   docs: Doc[];

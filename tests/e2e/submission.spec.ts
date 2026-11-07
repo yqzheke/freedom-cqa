@@ -1,0 +1,25 @@
+import { test, expect } from "@playwright/test";
+test("download official submission with every source ID, including errors",async({page,request})=>{
+ const records=Array.from({length:10},(_,i)=>({conversation_id:`export-e2e-${i}`,channel:"agent chat",language:"RU",transcript:[{timestamp:"00:00",speaker:"operator",text:"Synthetic export fixture"}]}));
+ const imported=await request.post("/api/workspace",{headers:{Origin:"http://127.0.0.1:3376"},data:{op:"import",payload:{isSuccess:true,error:"",data:{dataset_group_id:"export-e2e",total_records:10,records}}}});
+ expect(imported.ok()).toBeTruthy();
+ await page.goto("/");
+ await page.getByLabel("Версия чек-листа").selectOption("official-chat-v1");
+ await page.getByRole("button",{name:"Запуски",exact:true}).click();
+ await page.getByText("Официальная сдача: results.json",{exact:true}).click();
+ await page.getByLabel("Команда",{exact:true}).fill("Synthetic team");
+ await page.getByLabel("Набор",{exact:true}).selectOption("export-e2e");
+ await page.getByLabel("Этап",{exact:true}).selectOption("prod");
+ const responsePromise=page.waitForResponse(r=>r.request().method()==="POST"&&r.request().postDataJSON()?.op==="exportSubmission");
+ const downloadPromise=page.waitForEvent("download");
+ await page.getByRole("button",{name:"Скачать официальный JSON",exact:true}).click();
+ const response=await responsePromise;
+ expect(response.ok()).toBeTruthy();
+ const result=await response.json();
+ expect(result.path).toBe("results/prod/results.json");expect(result.saved).toBe(false);
+ expect(result.artifact.results).toHaveLength(10);
+ expect(result.artifact.results.every((r:{status:string,score:unknown})=>r.status==="error"&&r.score===null)).toBeTruthy();
+ expect(JSON.stringify(result.artifact)).not.toContain("Synthetic export fixture");
+ expect((await downloadPromise).suggestedFilename()).toBe("results.json");
+ await expect(page.getByRole("status").filter({hasText:"Записей: 10; ошибок: 10"})).toBeVisible();
+});

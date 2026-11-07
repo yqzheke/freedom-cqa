@@ -58,6 +58,9 @@ export function assessmentContract(r: Rubric) {
   }
   const variants = Array.from(groups.values(), (g) =>
     finding.extend({
+      evidence: z.array(
+        finding.shape.evidence.element.omit({ quoteSource: true }),
+      ),
       id: z.enum(g.ids),
       status: z.enum(g.status),
       answer: g.answer,

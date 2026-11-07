@@ -1,0 +1,60 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { groqReservationUntil, nextGroqRequestAt } from "../../lib/groq-pacing";
+import type { Call } from "../../lib/store";
+vi.mock("node:fs/promises", async (original) => {
+  const fs = await original<typeof import("node:fs/promises")>();
+  return {...fs, readFile: (...args: Parameters<typeof fs.readFile>) => args[0] === ".env.local" ? Promise.resolve("GROQ_API_KEY=test-only") : fs.readFile(...args)};
+});
+beforeEach(async () => {
+  vi.resetModules();
+  for (const [k,v] of Object.entries({CQA_TEST_STATE_DIR:await mkdtemp(join(tmpdir(),"cqa-pacing-")),SUPABASE_URL:"",VERCEL:"",DEMO_ACCESS_TOKEN:"",TEXT_EVALUATION_PROVIDER:"groq",GROQ_TEXT_MODEL:"openai/gpt-oss-120b",GROQ_FREE_REQUESTS_PER_DAY:"44",MAX_CALL_USD:"0",EVALUATION_BUDGET_USD:"0"})) vi.stubEnv(k,v);
+  vi.useFakeTimers({toFake:["Date"]});
+  vi.setSystemTime(new Date("2026-11-07T00:00:00Z"));
+  vi.stubGlobal("fetch",vi.fn(()=>{throw Error("Unexpected network request");}));
+});
+afterEach(()=>{vi.useRealTimers();vi.unstubAllEnvs();vi.unstubAllGlobals();});
+it("reserves a full minute, extends for larger reported usage and ignores Gemini",()=>{
+  expect(groqReservationUntil(0)).toBe(65000);
+  expect(groqReservationUntil(0,{prompt_tokens:10000,completion_tokens:6000})).toBe(130000);
+  expect(groqReservationUntil(0,{prompt_tokens:-5,completion_tokens:0})).toBe(65000);
+  expect(nextGroqRequestAt([{provider:"gemini",date:new Date().toISOString()} as Call])).toBe(0);
+});
+it("reserves atomically across simultaneous calls and survives module restart without spending attempts while waiting",async()=>{
+  const {billed}=await import("../../lib/provider");
+  const call=vi.fn(async()=>({}));
+  const usage=()=>({id:"mock",input:12000,output:4000,cached:0,audio:0,raw:{prompt_tokens:12000,completion_tokens:4000}});
+  const run=(id:string)=>billed(id,"openai/gpt-oss-120b",call,usage,{provider:"groq",token:"t",stage:"text"});
+  const {change,state}=await import("../../lib/store");
+  await change(s=>["mock","other"].forEach(id=>s.runs.push({id,doc:"demo-RU",version:"demo-v1",key:"test",status:"running",token:"t",lease:Date.now()+240000,created:new Date().toISOString(),cancel:false,original:[],current:[],error:""})));
+  const results=await Promise.allSettled([run("mock"),run("other")]);
+  expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);
+  expect(call).toHaveBeenCalledTimes(1);expect((await state()).calls).toHaveLength(1);
+  vi.resetModules();
+  const restarted=await import("../../lib/store");
+  expect(nextGroqRequestAt((await restarted.state()).calls)-Date.now()).toBe(130000);
+});
+it("defers repair automatically, resumes only the repair, and keeps manual HTTP429 pause",async()=>{
+  const {POST}=await import("../../app/api/workspace/route");
+  const {NextRequest}=await import("next/server");
+  const {state}=await import("../../lib/store");
+  const post=(body:object)=>POST(new NextRequest("http://127.0.0.1/api/workspace",{method:"POST",headers:{host:"127.0.0.1",origin:"http://127.0.0.1"},body:JSON.stringify(body)}));
+  await post({op:"start",doc:"demo-RU",version:"demo-v1"});
+  const s=await state(), id=s.runs[0].id, d=s.docs[0];
+  const rows=s.versions[0].r.criteria.map((c,i)=>({id:c.id,status:i?"na":"applicable",answer:i?null:true,reason:"fixture",critical:false,evidence:[{from:2,to:2,quote:d.data.transcript[1].text,expected:""}]}));
+  const bad=structuredClone(rows);bad[0].evidence[0].quote="invented";
+  vi.mocked(fetch).mockResolvedValueOnce(Response.json({id:"fixture",choices:[{finish_reason:"stop",message:{content:JSON.stringify({results:bad})}}],usage:{prompt_tokens:4000,completion_tokens:1000}}));
+  await post({op:"step",id});
+  let current=await state();
+  expect(current.runs[0].status).toBe("queued");expect(current.queuePause).toBeUndefined();
+  expect(current.runs[0].repairDraft).toBeDefined();expect(current.runs[0].nextAttemptAt).toBe(Date.now()+65000);
+  await post({op:"step",id});expect(fetch).toHaveBeenCalledTimes(1);
+  vi.setSystemTime(Date.now()+65001);
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(null,{status:429,headers:{"retry-after":"30"}}));
+  await post({op:"step",id});current=await state();
+  expect(fetch).toHaveBeenCalledTimes(2);expect(current.calls.map(c=>c.stage)).toEqual(["text","repair"]);
+  expect(current.queuePause).toBeTruthy();expect(current.runs[0].status).toBe("queued");
+  vi.setSystemTime(Date.now()+130000);await post({op:"step",id});expect(fetch).toHaveBeenCalledTimes(2);
+});

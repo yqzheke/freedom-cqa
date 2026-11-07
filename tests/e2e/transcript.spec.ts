@@ -1,0 +1,20 @@
+import {test,expect} from "@playwright/test";
+test("manual correction persists without modifying original or silently starting evaluation",async({page,request})=>{
+ const headers={Origin:"http://127.0.0.1:3376"};
+ const data={conversation_id:"manual-call-fixture",channel:"voice call",language:"RU",transcript:[{timestamp:"2026-11-07T01:00:00Z",speaker:"operator",text:"Original fixture"}]};
+ expect((await request.post("/api/workspace",{headers,data:{op:"import",payload:{isSuccess:true,error:"",data:{dataset_group_id:"manual-fixture",total_records:1,records:[data]}}}})).ok()).toBeTruthy();
+ await page.goto("/"); await page.getByText("manual-call-fixture",{exact:true}).first().click();
+ await page.getByRole("button",{name:"Исправить транскрипт вручную"}).click();
+ await page.getByLabel("Исправление реплики 1",{exact:true}).fill("<script>alert(1)</script> Corrected fixture");
+ await page.getByLabel("Причина исправления",{exact:true}).fill("Synthetic audio check");
+ const response=page.waitForResponse(r=>r.request().method()==="POST"&&r.request().postDataJSON()?.op==="correctTranscript");
+ await page.getByRole("button",{name:"Сохранить отдельную версию"}).click();expect((await response).ok()).toBeTruthy();
+ await expect(page.getByLabel("Источник транскрипта")).toHaveValue("");
+ const s=await (await request.get("/api/workspace")).json(),doc=s.docs.find((d:{data:{conversation_id:string}})=>d.data.conversation_id==="manual-call-fixture"),revision=s.transcriptRevisions.find((r:{doc:string})=>r.doc===doc.id);
+ expect(doc.data.transcript[0].text).toBe("Original fixture");expect(s.runs.filter((r:{doc:string})=>r.doc===doc.id)).toHaveLength(0);
+ await page.getByLabel("Источник транскрипта").selectOption(revision.id);
+ await expect(page.locator("#m1")).toContainText("<script>alert(1)</script> Corrected fixture");expect(await page.locator("#m1 script").count()).toBe(0);
+ await page.reload();await page.getByText("manual-call-fixture",{exact:true}).first().click();
+ await expect(page.getByLabel("Источник транскрипта")).toHaveValue("");await expect(page.locator("#m1")).toContainText("Original fixture");
+ await page.getByLabel("Источник транскрипта").selectOption(revision.id);await expect(page.locator("#m1")).toContainText("Corrected fixture");
+});
