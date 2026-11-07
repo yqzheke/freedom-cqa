@@ -1,3 +1,5 @@
+> Current provider decision: Gemini only. The original provider examples below are historical. Use README.md and .env.example for the implemented configuration.
+
 # Freedom Broker CQA implementation task
 
 ## Mission for Codex

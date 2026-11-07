@@ -1,0 +1,39 @@
+{
+  "name": "freedom-cqa",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "vitest run tests/unit",
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "e2e": "playwright test"
+  },
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@supabase/supabase-js": "2.119.0",
+    "@tailwindcss/postcss": "4.3.5",
+    "decimal.js": "10.6.0",
+    "html-entities": "2.6.0",
+    "music-metadata": "12.3.5",
+    "next": "16.4.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwindcss": "4.3.5",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.4.5",
+    "prettier": "3.9.10",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0"
+  },
+  "private": true
+}

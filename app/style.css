@@ -1,0 +1,205 @@
+@import "tailwindcss";
+:root {
+  font:
+    15px/1.5 Inter,
+    "Segoe UI",
+    sans-serif;
+  color: #152b3b;
+  background: #f3f6f6;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+header {
+  background: #102d38;
+  color: white;
+  padding: 16px 4vw;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+header b {
+  font-size: 24px;
+}
+header span {
+  color: #8be1be;
+}
+nav,
+.bar,
+.grid {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+nav button {
+  color: white;
+  background: transparent;
+  border: 0;
+}
+nav button[aria-current] {
+  background: #245040;
+}
+main {
+  max-width: 1700px;
+  padding: 28px 4vw;
+  margin: auto;
+}
+h1 {
+  font-size: 36px;
+  letter-spacing: -1.5px;
+  margin: 0 0 16px;
+  font-weight: 700;
+}
+h2 {
+  font-size: 22px;
+  margin: 0 0 15px;
+  font-weight: 650;
+}
+h3 {
+  font-size: 17px;
+  margin: 4px 0;
+  font-weight: 650;
+}
+section,
+aside,
+main > details {
+  background: white;
+  border: 1px solid #d5dfdf;
+  border-radius: 12px;
+  padding: 20px;
+  min-width: 0;
+}
+main > details,
+.version {
+  margin-bottom: 16px;
+}
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.7fr) minmax(250px, 1.25fr) minmax(
+      260px,
+      1fr
+    );
+  gap: 16px;
+  align-items: start;
+}
+.workspace section,
+.workspace aside {
+  max-height: 77vh;
+  overflow: auto;
+}
+.grid > * {
+  flex: 1;
+  min-width: 90px;
+}
+article {
+  padding: 14px 0;
+  border-top: 1px solid #dae2e1;
+  overflow-wrap: anywhere;
+}
+p {
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+small {
+  display: block;
+  color: #526569;
+}
+.item {
+  display: block;
+  text-align: left;
+  width: 100%;
+  margin: 7px 0;
+}
+.selected,
+.highlight {
+  background: #def6ed;
+  border-color: #329576;
+}
+.score {
+  font-size: 30px;
+  color: #006748;
+}
+button,
+summary {
+  cursor: pointer;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  padding: 7px 10px;
+  border: 1px solid #b8c9c7;
+  border-radius: 6px;
+  background: white;
+  color: inherit;
+}
+button:hover {
+  border-color: #168266;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.primary {
+  background: #086a50;
+  color: white;
+}
+label {
+  display: block;
+  margin: 8px 0;
+  color: #34535a;
+}
+label input:not([type="checkbox"]),
+label select,
+textarea,
+aside > input {
+  display: block;
+  width: 100%;
+}
+textarea {
+  min-height: 90px;
+}
+.version {
+  max-width: 420px;
+}
+details {
+  margin: 10px 0;
+}
+.evidence {
+  display: block;
+  text-align: left;
+  color: #006647;
+  margin: 8px 0;
+}
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 3px solid #008968;
+}
+audio {
+  max-width: 100%;
+}
+@media (max-width: 850px) {
+  header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .workspace aside {
+    max-height: 300px;
+  }
+  .workspace section {
+    max-height: none;
+  }
+  main {
+    padding: 16px;
+  }
+}
