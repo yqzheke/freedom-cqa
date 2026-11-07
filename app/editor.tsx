@@ -58,7 +58,9 @@ export function Editor({
             }
           >
             {["nearest", "floor", "ceil"].map((k) => (
-              <option key={k}>{k}</option>
+              <option key={k} value={k}>
+                {k === "nearest" ? "Половина вверх" : k}
+              </option>
             ))}
           </select>
         </label>
@@ -133,7 +135,9 @@ export function Editor({
                 }
               >
                 {["transcript", "audio", "both"].map((k) => (
-                  <option key={k}>{k}</option>
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
                 ))}
               </select>
             </label>
@@ -158,7 +162,9 @@ export function Editor({
                 }
               >
                 {["boolean", "number", "choice"].map((k) => (
-                  <option key={k}>{k}</option>
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
                 ))}
               </select>
             </label>

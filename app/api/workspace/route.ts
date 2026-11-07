@@ -1,3 +1,4 @@
+import { groupChats, groupProgress } from "../../../lib/control";
 import { configuredProvider, groqModel } from "../../../lib/groq";
 import {
   recordDecision,
@@ -141,41 +142,56 @@ export async function POST(req: NextRequest) {
         const id = hash(r);
         if (!s.versions.some((v) => v.id === id)) s.versions.push({ id, r });
       });
-    } else if (b.op === "start") {
+    } else if (b.op === "start" || b.op === "startGroup") {
       await change((s) => {
+        const version = s.versions.find((v) => v.id === b.version);
+        if (!version) throw Error("Версия недоступна");
+        const docs =
+          b.op === "startGroup"
+            ? groupChats(s.docs, z.string().min(1).parse(b.group))
+            : s.docs.filter((d) => d.id === b.doc);
+        if (!docs.length || docs.length > 10)
+          throw Error("Выберите группу из одного–десяти чатов");
         if (
-          !s.docs.some((x) => x.id === b.doc) ||
-          !s.versions.some((x) => x.id === b.version)
+          b.op === "startGroup" &&
+          (version.r.digits !== 2 || version.r.round !== "nearest")
         )
-          throw Error("Версия недоступна");
-        const textProvider =
-          s.docs.find((x) => x.id === b.doc)!.data.channel === "agent chat"
-            ? configuredProvider()
-            : "gemini";
-        const key = hash([
-          b.doc,
-          b.version,
-          process.env.GEMINI_TEXT_MODEL,
-          process.env.GEMINI_AUDIO_MODEL,
-          "v1",
-          ...(textProvider === "groq" ? ["groq", groqModel] : []),
-        ]);
-        if (!s.runs.some((x) => x.key === key))
-          s.runs.push({
-            key,
-            textProvider,
-            id: crypto.randomUUID(),
-            doc: b.doc,
-            version: b.version,
-            status: "queued",
-            token: "",
-            lease: 0,
-            created: new Date().toISOString(),
-            original: [],
-            current: [],
-            cancel: false,
-            error: "",
-          });
+          throw Error(
+            "Для контроля выберите округление половина вверх до двух знаков",
+          );
+        for (const doc of docs) {
+          const textProvider =
+            doc.data.channel === "agent chat" ? configuredProvider() : "gemini";
+          if (
+            b.op === "startGroup" &&
+            groupProgress([doc], s.runs, b.version, textProvider)[0].run
+          )
+            continue;
+          const key = hash([
+            doc.id,
+            b.version,
+            process.env.GEMINI_TEXT_MODEL,
+            process.env.GEMINI_AUDIO_MODEL,
+            "v1",
+            ...(textProvider === "groq" ? ["groq", groqModel] : []),
+          ]);
+          if (!s.runs.some((x) => x.key === key))
+            s.runs.push({
+              key,
+              textProvider,
+              id: crypto.randomUUID(),
+              doc: doc.id,
+              version: b.version,
+              status: "queued",
+              token: "",
+              lease: 0,
+              created: new Date().toISOString(),
+              original: [],
+              current: [],
+              cancel: false,
+              error: "",
+            });
+        }
       });
     } else if (b.op === "resumeQueue") {
       await change((s) => {

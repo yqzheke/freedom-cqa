@@ -112,3 +112,25 @@ it("allows exact client context for NA and rejects it as proof of operator perfo
     validateEvidence(d, c, { ...f, status: "applicable", answer: true }),
   ).toThrow("Источник цитаты");
 });
+it.each([
+  [2.6749, 2.67],
+  [2.675, 2.68],
+  [2.6751, 2.68],
+  [0.005, 0.01],
+  [99.995, 100],
+])("rounds final percentage %s half up to %s", (value, expected) => {
+  const r = structuredClone(official);
+  r.criteria = [
+    {
+      ...r.criteria[3],
+      weight: 3,
+      mapping: { kind: "number", min: 0, max: 100, descending: false },
+    },
+    { ...r.criteria[1], weight: 7 },
+  ];
+  const a: Finding[] = [
+    { ...findings()[3], answer: value },
+    { ...findings()[1], status: "na", answer: null },
+  ];
+  expect(calculate(r, a).score).toBe(expected);
+});

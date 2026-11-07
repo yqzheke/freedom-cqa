@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { z } from "zod";
-import { HttpFailure, ValidationFailure } from "./diagnostics";
+import { groqFailure, groqSchema } from "./groq-wire";
+import { ValidationFailure } from "./diagnostics";
 export const groqModel = "qwen/qwen3.8-27b";
 export function configuredProvider(): "gemini" | "groq" {
   const provider = process.env.TEXT_EVALUATION_PROVIDER ?? "gemini";
@@ -60,11 +61,15 @@ export async function groqText(
       max_completion_tokens: 3000,
       response_format: {
         type: "json_schema",
-        json_schema: { name: "assessment", strict: true, schema },
+        json_schema: {
+          name: "assessment",
+          strict: true,
+          schema: groqSchema(schema),
+        },
       },
     }),
   });
-  if (!r.ok) throw new HttpFailure(r.status, "Groq");
+  if (!r.ok) throw await groqFailure(r);
   const parsed = envelope.safeParse(await r.json().catch(() => null));
   if (!parsed.success)
     throw new ValidationFailure("Ошибка структуры ответа Groq");

@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { Observations } from "./observations";
+import { ControlGroup } from "./control-group";
 import { ReviewPanel } from "./review-panel";
 import { recommendations } from "../lib/review";
 import { Editor } from "./editor";
@@ -439,12 +440,23 @@ export default function Workspace() {
                         {r.original.length > 0 && v && (
                           <>
                             <strong className="score">
-                              {total?.score ?? "—"} / 100
+                              {v.r.digits === 2
+                                ? (total?.score?.toFixed(2) ?? "—")
+                                : (total?.score ?? "—")}{" "}
+                              / 100
                             </strong>
                             <p>
                               Исходная оценка:{" "}
-                              {calculate(v.r, r.original).score ?? "—"} ·
-                              Итоговая: {total?.score ?? "—"}
+                              {v.r.digits === 2
+                                ? (calculate(v.r, r.original).score?.toFixed(
+                                    2,
+                                  ) ?? "—")
+                                : (calculate(v.r, r.original).score ??
+                                  "—")}{" "}
+                              · Итоговая:{" "}
+                              {v.r.digits === 2
+                                ? (total?.score?.toFixed(2) ?? "—")
+                                : (total?.score ?? "—")}
                             </p>
                             {Object.entries(total?.sections ?? {}).map(
                               ([k, n]) => (
@@ -498,7 +510,7 @@ export default function Workspace() {
                                   <small>
                                     Вес {c.weight} · Эфф.{" "}
                                     {row?.effective.toFixed(1)}% · Вклад{" "}
-                                    {row?.contribution.toFixed(1)}
+                                    {row?.contribution.toFixed(v.r.digits)}
                                   </small>
                                   {f.evidence.map((e, j) => (
                                     <button
@@ -629,6 +641,19 @@ export default function Workspace() {
             {tab === "Запуски" && (
               <section>
                 <p>Оставьте вкладку открытой для обработки очереди.</p>
+                {v && (
+                  <ControlGroup
+                    state={s}
+                    version={v}
+                    provider={s.textProvider}
+                    busy={busy}
+                    act={act}
+                    open={(id) => {
+                      select(id);
+                      nav("Диалоги");
+                    }}
+                  />
+                )}
                 {s.queuePause && (
                   <article role="status">
                     <p>{s.queuePause}</p>

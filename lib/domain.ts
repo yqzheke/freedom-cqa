@@ -246,7 +246,13 @@ export function calculate(r: Rubric, answers: Finding[]) {
         ? null
         : critical && r.criticalZero
           ? 0
-          : rounded(exactTotal),
+          : rounded(
+              r.scope === "global"
+                ? sum(active.map((x) => x.n!.times(x.c.weight)))
+                    .times(100)
+                    .div(total)
+                : exactTotal,
+            ),
     critical,
     details,
     sections: Object.fromEntries(

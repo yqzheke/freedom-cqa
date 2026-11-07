@@ -223,3 +223,202 @@ it("rejects an unrecognized status without echoing provider text", async () => {
   expect(diagnostic).not.toContain("private invalid enum");
   expect(diagnostic).not.toContain("NA_FORBIDDEN");
 });
+it("reports only recognized error fields for a repair HTTP 400 and stops after one repair", async () => {
+  const { state, rows, step, reply } = await fixture();
+  const bad = structuredClone(rows);
+  bad[0].evidence[0].quote = "unverified";
+  vi.mocked(fetch)
+    .mockResolvedValueOnce(reply(bad))
+    .mockResolvedValueOnce(
+      Response.json(
+        {
+          error: {
+            code: "json_validate_failed",
+            type: "invalid_request_error",
+            param: "response_format",
+            failed_generation: "private",
+            message: "private",
+          },
+        },
+        { status: 400 },
+      ),
+    );
+  await step();
+  await step();
+  const s = await state();
+  expect(s.calls[1]).toMatchObject({ stage: "repair", status: "http_error" });
+  expect(s.calls[1].diagnostic).toBe(
+    "Ошибка Groq: HTTP 400 · code=json_validate_failed · type=invalid_request_error · param=response_format",
+  );
+  expect(JSON.stringify(s.calls)).not.toContain("private");
+  expect(fetch).toHaveBeenCalledTimes(2);
+  const requests = vi
+    .mocked(fetch)
+    .mock.calls.map(([, o]) => JSON.parse(String(o?.body)));
+  expect(requests[0].response_format).toEqual(requests[1].response_format);
+});
+it("redacts arbitrary error codes, types and parameter values", async () => {
+  const { groqFailure } = await import("../../lib/groq-wire");
+  const e = await groqFailure(
+    Response.json(
+      {
+        error: {
+          type: "untrusted-type",
+          code: "untrusted-code",
+          param: "untrusted-param",
+        },
+      },
+      { status: 400 },
+    ),
+  );
+  expect(e.message).toBe(
+    "Ошибка Groq: HTTP 400 · code=unknown · type=unknown · param=unknown",
+  );
+});
+it("uses a closed Groq schema for the official checklist and preserves criterion branches", async () => {
+  const { groqSchema } = await import("../../lib/groq-wire"),
+    { assessmentContract } = await import("../../lib/assessment-contract"),
+    { official } = await import("../../lib/official"),
+    { z } = await import("zod");
+  const schema = groqSchema(z.toJSONSchema(assessmentContract(official)));
+  function inspect(node: Record<string, unknown>) {
+    expect(
+      Object.keys(node).every((k) =>
+        [
+          "type",
+          "properties",
+          "items",
+          "anyOf",
+          "enum",
+          "required",
+          "additionalProperties",
+        ].includes(k),
+      ),
+    ).toBe(true);
+    if (node.type === "object") {
+      expect(node.additionalProperties).toBe(false);
+      const properties = node.properties as Record<
+        string,
+        Record<string, unknown>
+      >;
+      expect(new Set(node.required as string[])).toEqual(
+        new Set(Object.keys(properties)),
+      );
+      Object.values(properties).forEach(inspect);
+    }
+    if (node.items) inspect(node.items as Record<string, unknown>);
+    if (node.anyOf) (node.anyOf as Record<string, unknown>[]).forEach(inspect);
+  }
+  inspect(schema);
+  expect(JSON.stringify(schema)).toContain("contact");
+  expect(JSON.stringify(schema)).toContain("anyOf");
+});
+it("evaluates ten chats under two versions without duplicating calls, losing evidence or rewriting history", async () => {
+  const { post, state } = await fixture();
+  const { official } = await import("../../lib/official");
+  const { groupChats, groupProgress } = await import("../../lib/control");
+  vi.stubEnv("TEXT_EVALUATION_PROVIDER", "gemini");
+  vi.stubEnv("GEMINI_BILLING_MODE", "budgeted");
+  vi.stubEnv("GEMINI_API_KEY", "test-only");
+  vi.stubEnv("GEMINI_TEXT_MODEL", "gemini-test");
+  vi.stubEnv(
+    "MODEL_PRICES_JSON",
+    '{"gemini-test":{"input":0,"output":0,"audio":0,"cached":0}}',
+  );
+  vi.stubEnv("MAX_CALL_USD", "1");
+  vi.stubEnv("EVALUATION_BUDGET_USD", "1");
+  const records = Array.from({ length: 10 }, (_, i) => ({
+    ...requireDoc(),
+    conversation_id: "synthetic-" + i,
+  }));
+  function requireDoc() {
+    return {
+      language: "EN",
+      channel: "agent chat",
+      audio_url: null,
+      transcript: [
+        {
+          speaker: "operator",
+          text: "Synthetic fixture greeting.",
+          timestamp: "00:01",
+        },
+      ],
+    };
+  }
+  await post({
+    op: "import",
+    payload: {
+      isSuccess: true,
+      error: "",
+      data: { dataset_group_id: "TEST-CONTROL", total_records: 10, records },
+    },
+  });
+  const edited = structuredClone(official);
+  edited.criteria[0].id = "replacement";
+  edited.criteria[0].instruction = "Synthetic replacement criterion";
+  const answer = (r: typeof official) =>
+    r.criteria.map((c) => ({
+      id: c.id,
+      status: "applicable",
+      critical: false,
+      answer:
+        c.mapping.kind === "boolean"
+          ? c.id !== "severe"
+          : c.mapping.kind === "number"
+            ? c.mapping.max
+            : "a",
+      reason: "synthetic",
+      evidence: [
+        { from: 1, to: 1, quote: "Synthetic fixture greeting.", expected: "" },
+      ],
+    }));
+  async function processVersion(version: string, r: typeof official) {
+    const start = { op: "startGroup", group: "TEST-CONTROL", version };
+    await Promise.all([post(start), post(start)]);
+    const s = await state();
+    const items = groupProgress(
+      groupChats(s.docs, "TEST-CONTROL"),
+      s.runs,
+      version,
+      "gemini",
+    );
+    expect(items).toHaveLength(10);
+    expect(items.every((i) => i.run?.status === "queued")).toBe(true);
+    for (const { run } of items) {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        Response.json({
+          candidates: [
+            {
+              finishReason: "STOP",
+              content: {
+                parts: [{ text: JSON.stringify({ results: answer(r) }) }],
+              },
+            },
+          ],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+        }),
+      );
+      await post({ op: "step", id: run!.id });
+    }
+    await post(start);
+    const after = await state();
+    const runs = after.runs.filter(
+      (x) => x.version === version && items.some((i) => i.doc.id === x.doc),
+    );
+    expect(runs).toHaveLength(10);
+    expect(
+      runs.every((x) => x.status === "completed" && x.original.length === 8),
+    ).toBe(true);
+    return runs;
+  }
+  const old = await processVersion("official-chat-v1", official);
+  await post({ op: "publish", r: edited });
+  const newId = (await state()).versions.at(-1)!.id;
+  const fresh = await processVersion(newId, edited);
+  expect(fresh[0].original[0].id).toBe("replacement");
+  expect(fresh[0].original[0].evidence[0].from).toBe(1);
+  expect(
+    (await state()).runs.filter((r) => old.some((o) => o.id === r.id)),
+  ).toEqual(old);
+  expect(fetch).toHaveBeenCalledTimes(20);
+});
