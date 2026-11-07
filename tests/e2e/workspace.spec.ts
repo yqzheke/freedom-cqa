@@ -17,7 +17,14 @@ test("publish unseen criterion, select dialogue and track real execution failure
   ).toContainText("E2E custom");
   await page.getByRole("button", { name: "Диалоги", exact: true }).click();
   await page.getByRole("button", { name: "Запустить оценку" }).click();
-  await expect(page.getByText(/failed.*GEMINI_API_KEY/)).toBeVisible();
+  await expect(page.getByText(/ошибкой.*GEMINI_API_KEY/)).toBeVisible();
   await page.reload();
-  await expect(page.getByText(/failed.*GEMINI_API_KEY/)).toBeVisible();
+  await expect(page.getByText(/ошибкой.*GEMINI_API_KEY/)).toBeVisible();
+  const retry = page.getByRole("button", { name: "Повторить оценку" });
+  const request = page.waitForRequest(
+    (req) => req.method() === "POST" && req.postDataJSON()?.op === "retry",
+  );
+  await retry.click();
+  await request;
+  await expect(page.getByText(/ошибкой.*GEMINI_API_KEY/)).toBeVisible();
 });

@@ -381,8 +381,23 @@ export default function Workspace() {
                     ) : (
                       <>
                         <p>
-                          {r.status} {r.error}
+                          {r.status === "failed"
+                            ? "Последняя попытка завершилась ошибкой."
+                            : r.status}{" "}
+                          {r.error}
                         </p>
+                        {["failed", "cancelled"].includes(r.status) &&
+                          (s.queuePause ? (
+                            <p>{s.queuePause} Откройте вкладку «Запуски».</p>
+                          ) : (
+                            <button
+                              className="primary"
+                              disabled={busy}
+                              onClick={() => act({ op: "retry", id: r.id })}
+                            >
+                              Повторить оценку
+                            </button>
+                          ))}
                         {r.audio && (
                           <details>
                             <summary>
