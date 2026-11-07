@@ -31,6 +31,7 @@ const response = z.object({
     .passthrough()
     .optional(),
 });
+export class GeminiRateLimit extends Error {}
 export const defaultModel = "gemini-3.5-flash";
 type Part =
   { text: string } | { inlineData: { mimeType: string; data: string } };
@@ -65,6 +66,7 @@ export async function generate(
       }),
     },
   );
+  if (res.status === 429) throw new GeminiRateLimit("Gemini HTTP 429");
   if (!res.ok) throw Error("Gemini HTTP " + res.status);
   return response.parse(await res.json());
 }

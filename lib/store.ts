@@ -46,6 +46,7 @@ export type Appeal = {
   revision: number;
 };
 export type Call = {
+  mode?: "free_only";
   id: string;
   run: string;
   model: string;
@@ -58,6 +59,7 @@ export type Call = {
   request?: string;
 };
 export type State = {
+  queuePause?: string;
   docs: Doc[];
   versions: Version[];
   runs: Run[];

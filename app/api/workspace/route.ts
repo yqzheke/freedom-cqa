@@ -169,10 +169,14 @@ export async function POST(req: NextRequest) {
             error: "",
           });
       });
+    } else if (b.op === "resumeQueue") {
+      await change((s) => {
+        delete s.queuePause;
+      });
     } else if (b.op === "step") {
       const claim = await change((s) => {
         const r = s.runs.find((x) => x.id === b.id);
-        if (!r) return null;
+        if (!r || s.queuePause) return null;
         if (r.status === "running" && r.lease < Date.now()) {
           r.status = r.cancel ? "cancelled" : "failed";
           r.error = "Истекло время обработки. Проверьте расходы перед повтором";
@@ -208,7 +212,8 @@ export async function POST(req: NextRequest) {
             const r = s.runs.find((x) => x.id === b.id)!;
             if (r.token === claim.token) {
               r.status = r.cancel ? "cancelled" : "failed";
-              r.error = safe(e);
+              if (s.queuePause && !r.cancel) r.status = "queued";
+              r.error = s.queuePause ?? safe(e);
             }
           });
         }

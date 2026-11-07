@@ -134,9 +134,10 @@ export default function Workspace() {
       await refresh();
     })().catch((e) => notice(e.message));
   }, [refresh]);
-  const next =
-    s?.runs.find((x) => x.status === "running") ??
-    s?.runs.find((x) => x.status === "queued");
+  const next = s?.queuePause
+    ? undefined
+    : (s?.runs.find((x) => x.status === "running") ??
+      s?.runs.find((x) => x.status === "queued"));
   useEffect(() => {
     if (!next) return;
     const timer = setTimeout(
@@ -548,6 +549,17 @@ export default function Workspace() {
             {tab === "Запуски" && (
               <section>
                 <p>Оставьте вкладку открытой для обработки очереди.</p>
+                {s.queuePause && (
+                  <article role="status">
+                    <p>{s.queuePause}</p>
+                    <button
+                      disabled={busy}
+                      onClick={() => act({ op: "resumeQueue" })}
+                    >
+                      Возобновить очередь
+                    </button>
+                  </article>
+                )}
                 <button
                   onClick={() => {
                     const rows = s.runs
