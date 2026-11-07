@@ -413,3 +413,43 @@ it("sends exactly one JSON Object request when resuming directly at repair", asy
     "Synthetic validation failure",
   );
 });
+
+it("requires manual resume after retry-after and never repeats a throttled step on its own", async () => {
+  const { state, step, post, rows, reply } = await fixture();
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    vi.mocked(fetch).mockResolvedValueOnce(Response.json(
+      { error: { type: "tokens", message: "private body" } },
+      { status: 429, headers: {
+        "retry-after": "61", "x-ratelimit-limit-tokens": "8000",
+        "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "1m0.5s",
+        "x-ratelimit-extra-tokens": "private header",
+      } },
+    )).mockResolvedValueOnce(reply(rows));
+    await step();
+    const s = await state();
+    expect(s.queueRetryAt).toBe(now + 61000);
+    for (const part of ["type=tokens", "8000", "Остаток токенов/мин: 0", "окна через 61 с", "Повтор не ранее чем через 61 с"])
+      expect(s.calls[0].diagnostic).toContain(part);
+    expect(JSON.stringify([s.queuePause, s.calls])).not.toContain("private");
+    await post({ op: "resumeQueue" });
+    await step();
+    clock.mockReturnValue(now + 61001);
+    await step();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await post({ op: "resumeQueue" });
+    await step();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect((await state()).runs[0].status).toBe("completed");
+  } finally { clock.mockRestore(); }
+});
+it("omits malformed rate headers without copying their contents", async () => {
+  const { groqFailure } = await import("../../lib/groq-wire");
+  const e = await groqFailure(new Response(null, { status: 429, headers: {
+    "retry-after": "private", "x-ratelimit-limit-tokens": "-1",
+    "x-ratelimit-remaining-tokens": "private", "x-ratelimit-reset-tokens": "1s private",
+  }}));
+  expect(e.message).toBe("Ошибка Groq: HTTP 429");
+  expect(e.retryAt).toBeUndefined();
+});

@@ -12,6 +12,7 @@ export function retryRun(run: Run, expected: unknown) {
 }
 export class ValidationFailure extends Error {}
 export class HttpFailure extends Error {
+  retryAt?: number;
   constructor(
     readonly status: number,
     provider: "Gemini" | "Groq" = "Gemini",

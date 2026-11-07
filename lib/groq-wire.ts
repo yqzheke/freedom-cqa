@@ -64,5 +64,28 @@ export async function groqFailure(r: Response) {
     });
     if (parts.length) err.message += " · " + parts.join(" · ");
   }
+  const numeric = (name: string) => {
+    const v = r.headers.get(name);
+    return v !== null && /^\d{1,12}$/.test(v) ? Number(v) : undefined;
+  };
+  for (const [header, label] of [
+    ["x-ratelimit-limit-tokens", "Лимит токенов/мин"],
+    ["x-ratelimit-remaining-tokens", "Остаток токенов/мин"],
+  ]) {
+    const n = numeric(header);
+    if (n !== undefined) err.message += " · " + label + ": " + n;
+  }
+  const reset = r.headers.get("x-ratelimit-reset-tokens") ?? "";
+  if (reset.length <= 40 && /^(?:\d+(?:\.\d{1,6})?(?:ms|s|m|h|d))+$/.test(reset)) {
+    const units: Record<string, number> = { ms: .001, s: 1, m: 60, h: 3600, d: 86400 };
+    const seconds = Array.from(reset.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h|d)/g))
+      .reduce((sum, m) => sum + Number(m[1]) * units[m[2]], 0);
+    if (Number.isSafeInteger(Math.ceil(seconds))) err.message += " · Сброс минутного окна через " + Math.ceil(seconds) + " с";
+  }
+  const retry = numeric("retry-after");
+  if (r.status === 429 && retry !== undefined) {
+    err.retryAt = Date.now() + retry * 1000;
+    err.message += " · Повтор не ранее чем через " + retry + " с (" + new Date(err.retryAt).toISOString() + ")";
+  }
   return err;
 }

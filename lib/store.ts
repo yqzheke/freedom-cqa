@@ -74,6 +74,7 @@ export type Call = {
 };
 export type State = {
   queuePause?: string;
+  queueRetryAt?: number;
   docs: Doc[];
   versions: Version[];
   runs: Run[];

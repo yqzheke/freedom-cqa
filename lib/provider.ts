@@ -203,11 +203,13 @@ export async function billed<T>(
               ? "invalid_response"
               : "unknown";
       row.diagnostic = diagnostic;
-      if (error instanceof HttpFailure && error.status === 429)
+      if (error instanceof HttpFailure && error.status === 429) {
+        if (error.retryAt !== undefined) s.queueRetryAt = Math.max(s.queueRetryAt ?? 0, error.retryAt);
         s.queuePause =
           provider === "groq"
-            ? quotaMessage.replace("Gemini", "Groq")
+            ? "Очередь на паузе. " + diagnostic + ". Возобновление вручную."
             : quotaMessage;
+      }
     });
     throw Error(diagnostic);
   }

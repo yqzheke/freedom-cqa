@@ -195,6 +195,8 @@ export async function POST(req: NextRequest) {
       });
     } else if (b.op === "resumeQueue") {
       await change((s) => {
+        if ((s.queueRetryAt ?? 0) > Date.now()) throw Error(s.queuePause);
+        delete s.queueRetryAt;
         delete s.queuePause;
       });
     } else if (b.op === "step") {
