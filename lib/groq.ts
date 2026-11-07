@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { parseEnv } from "node:util";
 import { z } from "zod";
-import { groqFailure, groqSchema } from "./groq-wire";
+import { groqFailure } from "./groq-wire";
 import { ValidationFailure } from "./diagnostics";
 export const groqModel = "qwen/qwen3.8-27b";
 export function configuredProvider(): "gemini" | "groq" {
@@ -42,7 +42,6 @@ export async function groqText(
   model: string,
   instruction: string,
   input: string,
-  schema: Record<string, unknown>,
 ) {
   const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -55,18 +54,17 @@ export async function groqText(
     body: JSON.stringify({
       model,
       messages: [
-        { role: "system", content: instruction },
+        {
+          role: "system",
+          content:
+            instruction +
+            "\nReturn exactly one JSON object with a results array. Each result must have id, status, answer, reason, critical and evidence. Each evidence item must have integer from and to (one-based inclusive), string quote and string expected. Use the supplied criterion mappings and allowedStatuses. Return no markdown.",
+        },
         { role: "user", content: input },
       ],
       max_completion_tokens: 3000,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
-          name: "assessment",
-          strict: true,
-          schema: groqSchema(schema),
-        },
-      },
+      reasoning_format: "hidden",
+      response_format: { type: "json_object" },
     }),
   });
   if (!r.ok) throw await groqFailure(r);

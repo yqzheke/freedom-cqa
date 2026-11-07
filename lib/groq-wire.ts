@@ -66,27 +66,3 @@ export async function groqFailure(r: Response) {
   }
   return err;
 }
-// Keep the rubric's enum/union rules in strict mode; descriptive and range
-// constraints are enforced by the local validator for every provider.
-export function groqSchema(
-  node: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!("type" in node || "anyOf" in node || "enum" in node || "const" in node))
-    throw Error("Неподдерживаемый узел схемы Groq");
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(node)) {
-    if (k === "properties")
-      out[k] = Object.fromEntries(
-        Object.entries(v as Record<string, Record<string, unknown>>).map(
-          ([name, child]) => [name, groqSchema(child)],
-        ),
-      );
-    else if (k === "items") out[k] = groqSchema(v as Record<string, unknown>);
-    else if (k === "anyOf")
-      out[k] = (v as Record<string, unknown>[]).map(groqSchema);
-    else if (k === "const") out.enum = [v];
-    else if (["type", "enum", "required", "additionalProperties"].includes(k))
-      out[k] = v;
-  }
-  return out;
-}

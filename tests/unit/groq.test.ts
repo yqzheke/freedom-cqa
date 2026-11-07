@@ -116,7 +116,8 @@ it("uses only Groq for the pinned chat; validates evidence, repairs the answer a
     );
     expect(JSON.parse(String(opts?.body))).toMatchObject({
       model: "qwen/qwen3.8-27b",
-      response_format: { type: "json_schema", json_schema: { strict: true } },
+      response_format: { type: "json_object" },
+      reasoning_format: "hidden",
     });
   }
 });
@@ -204,10 +205,7 @@ it("supplies the official first criterion's status policy and persists specific 
     const input = JSON.parse(body.messages[1].content);
     expect(input.criteria[0].allowedStatuses).toEqual(["applicable", "review"]);
     expect(input.criteria[1].allowedStatuses).toContain("na");
-    expect(
-      body.response_format.json_schema.schema.properties.results.items.anyOf
-        .length,
-    ).toBeGreaterThan(1);
+    expect(body.response_format).toEqual({ type: "json_object" });
   }
 });
 it("rejects an unrecognized status without echoing provider text", async () => {
@@ -255,7 +253,17 @@ it("reports only recognized error fields for a repair HTTP 400 and stops after o
   const requests = vi
     .mocked(fetch)
     .mock.calls.map(([, o]) => JSON.parse(String(o?.body)));
-  expect(requests[0].response_format).toEqual(requests[1].response_format);
+  expect(requests).toHaveLength(2);
+  for (const request of requests) {
+    expect(request.model).toBe("qwen/qwen3.8-27b");
+    expect(request.response_format).toStrictEqual({ type: "json_object" });
+    expect(request.reasoning_format).toBe("hidden");
+    expect(request.messages[0].content).toContain(
+      "one JSON object with a results array",
+    );
+  }
+  expect(JSON.parse(requests[0].messages[1].content).repair).toBe("");
+  expect(JSON.parse(requests[1].messages[1].content).repair).not.toBe("");
 });
 it("redacts arbitrary error codes, types and parameter values", async () => {
   const { groqFailure } = await import("../../lib/groq-wire");
@@ -274,44 +282,6 @@ it("redacts arbitrary error codes, types and parameter values", async () => {
   expect(e.message).toBe(
     "Ошибка Groq: HTTP 400 · code=unknown · type=unknown · param=unknown",
   );
-});
-it("uses a closed Groq schema for the official checklist and preserves criterion branches", async () => {
-  const { groqSchema } = await import("../../lib/groq-wire"),
-    { assessmentContract } = await import("../../lib/assessment-contract"),
-    { official } = await import("../../lib/official"),
-    { z } = await import("zod");
-  const schema = groqSchema(z.toJSONSchema(assessmentContract(official)));
-  function inspect(node: Record<string, unknown>) {
-    expect(
-      Object.keys(node).every((k) =>
-        [
-          "type",
-          "properties",
-          "items",
-          "anyOf",
-          "enum",
-          "required",
-          "additionalProperties",
-        ].includes(k),
-      ),
-    ).toBe(true);
-    if (node.type === "object") {
-      expect(node.additionalProperties).toBe(false);
-      const properties = node.properties as Record<
-        string,
-        Record<string, unknown>
-      >;
-      expect(new Set(node.required as string[])).toEqual(
-        new Set(Object.keys(properties)),
-      );
-      Object.values(properties).forEach(inspect);
-    }
-    if (node.items) inspect(node.items as Record<string, unknown>);
-    if (node.anyOf) (node.anyOf as Record<string, unknown>[]).forEach(inspect);
-  }
-  inspect(schema);
-  expect(JSON.stringify(schema)).toContain("contact");
-  expect(JSON.stringify(schema)).toContain("anyOf");
 });
 it("evaluates ten chats under two versions without duplicating calls, losing evidence or rewriting history", async () => {
   const { post, state } = await fixture();
@@ -421,4 +391,25 @@ it("evaluates ten chats under two versions without duplicating calls, losing evi
     (await state()).runs.filter((r) => old.some((o) => o.id === r.id)),
   ).toEqual(old);
   expect(fetch).toHaveBeenCalledTimes(20);
+});
+it("sends exactly one JSON Object request when resuming directly at repair", async () => {
+  const { id, step, state, reply, rows } = await fixture();
+  const { change } = await import("../../lib/store");
+  await change((s) => {
+    s.runs.find((r) => r.id === id)!.repairReason =
+      "Synthetic validation failure";
+  });
+  vi.mocked(fetch).mockResolvedValueOnce(reply(rows));
+  await step();
+  const s = await state();
+  expect(s.calls.map((c) => [c.stage, c.status])).toEqual([
+    ["repair", "complete"],
+  ]);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+  expect(body.response_format).toStrictEqual({ type: "json_object" });
+  expect(body.reasoning_format).toBe("hidden");
+  expect(JSON.parse(body.messages[1].content).repair).toBe(
+    "Synthetic validation failure",
+  );
 });

@@ -370,10 +370,6 @@ export async function evaluate(
   const key = provider === "groq" ? await localGroqKey() : "";
   async function textStage(repair: string) {
     const contract = z.object({ results: z.array(finding) });
-    const schema = z.toJSONSchema(assessmentContract(r), {
-      target: "draft-2020-12",
-    });
-    delete schema.$schema;
     let rows: z.infer<typeof finding>[] = [];
     await billed(
       run,
@@ -381,7 +377,7 @@ export async function evaluate(
       async () => {
         const instruction =
           system +
-          " Use only the allowedStatuses listed for each criterion. For a scorable boolean criterion return applicable with JSON true or false. For boolean criteria requiring an action, a missing or only partly fulfilled action is applicable with false, supported by an inspected range. An empty na condition forbids na. Reserve review for genuinely insufficient or unusable evidence, with answer=null and critical=false; review leaves the total unresolved. Set critical=false unless the criterion config permits it. When flagFromAnswer is true the flag must match the boolean answer. Respond using the supplied schema. In post-appeal review consider the supplied human decisions and reasons as context. Independently assess every criterion, including locked criteria, so disagreement can be reviewed. For acoustic criteria rely on attributable acoustic observations. For an absent act inspect and reference the relevant range. Do not invent quotes.";
+          " Use only the allowedStatuses listed for each criterion. For a scorable boolean criterion return applicable with JSON true or false. For boolean criteria requiring an action, a missing or only partly fulfilled action is applicable with false, supported by an inspected range. An empty na condition forbids na. Reserve review for genuinely insufficient or unusable evidence, with answer=null and critical=false; review leaves the total unresolved. Set critical=false unless the criterion config permits it. When flagFromAnswer is true the flag must match the boolean answer. Return a results array following the supplied criteria and answer rules. In post-appeal review consider the supplied human decisions and reasons as context. Independently assess every criterion, including locked criteria, so disagreement can be reviewed. For acoustic criteria rely on attributable acoustic observations. For an absent act inspect and reference the relevant range. Do not invent quotes.";
         const input = JSON.stringify({
           criteria: r.criteria.map((c) => ({
             ...c,
@@ -400,7 +396,11 @@ export async function evaluate(
           observations,
         });
         if (provider === "groq")
-          return groqText(key, model, instruction, input, schema);
+          return groqText(key, model, instruction, input);
+        const schema = z.toJSONSchema(assessmentContract(r), {
+          target: "draft-2020-12",
+        });
+        delete schema.$schema;
         const response = await generate(
           model,
           instruction,
