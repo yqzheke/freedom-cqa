@@ -15,6 +15,8 @@ export const hash = (o: unknown) =>
 export type Doc = { id: string; group: string; data: Dialogue };
 export type Version = { id: string; r: Rubric };
 export type Run = {
+  repairReason?: string;
+  attempt?: number;
   audio?: {
     observations: string;
     duration: number;
@@ -46,6 +48,10 @@ export type Appeal = {
   revision: number;
 };
 export type Call = {
+  attempt?: number;
+  stage?: "text" | "repair" | "audio";
+  leaseToken?: string;
+  diagnostic?: string;
   mode?: "free_only";
   id: string;
   run: string;

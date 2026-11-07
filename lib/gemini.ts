@@ -1,3 +1,4 @@
+import { HttpFailure, ValidationFailure } from "./diagnostics";
 import { z } from "zod";
 const response = z.object({
   responseId: z.string().optional(),
@@ -28,10 +29,14 @@ const response = z.object({
         .array(z.object({ modality: z.string(), tokenCount: z.number() }))
         .optional(),
     })
-    .passthrough()
+
     .optional(),
 });
-export class GeminiRateLimit extends Error {}
+export class GeminiRateLimit extends HttpFailure {
+  constructor() {
+    super(429);
+  }
+}
 export const defaultModel = "gemini-3.5-flash";
 type Part =
   { text: string } | { inlineData: { mimeType: string; data: string } };
@@ -66,9 +71,18 @@ export async function generate(
       }),
     },
   );
-  if (res.status === 429) throw new GeminiRateLimit("Gemini HTTP 429");
-  if (!res.ok) throw Error("Gemini HTTP " + res.status);
-  return response.parse(await res.json());
+  if (res.status === 429) throw new GeminiRateLimit();
+  if (!res.ok) throw new HttpFailure(res.status);
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    throw new ValidationFailure("Ошибка формата ответа Gemini: JSON");
+  }
+  const envelope = response.safeParse(body);
+  if (!envelope.success)
+    throw new ValidationFailure("Ошибка формата ответа Gemini: структура");
+  return envelope.data;
 }
 export function usage(v: z.infer<typeof response>) {
   const u = v.usageMetadata;
@@ -85,7 +99,19 @@ export function usage(v: z.infer<typeof response>) {
 }
 export function generatedJSON(v: z.infer<typeof response>) {
   const c = v.candidates?.[0];
-  if (c?.finishReason !== "STOP") throw Error("Неполный ответ Gemini");
+  if (c?.finishReason !== "STOP")
+    throw new ValidationFailure(
+      "Неполный ответ Gemini: " +
+        ([
+          "MAX_TOKENS",
+          "SAFETY",
+          "RECITATION",
+          "BLOCKLIST",
+          "PROHIBITED_CONTENT",
+        ].includes(c?.finishReason ?? "")
+          ? c!.finishReason
+          : "нет завершённого кандидата"),
+    );
   try {
     return JSON.parse(
       c.content?.parts
@@ -94,6 +120,6 @@ export function generatedJSON(v: z.infer<typeof response>) {
         .join("") ?? "",
     );
   } catch {
-    throw Error("Неполный ответ Gemini: JSON");
+    throw new ValidationFailure("Неполный ответ Gemini: JSON");
   }
 }

@@ -1,3 +1,4 @@
+import { retryRun } from "../../../lib/diagnostics";
 import { mediaResponse } from "../../../lib/media";
 import { NextRequest, NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -199,7 +200,12 @@ export async function POST(req: NextRequest) {
       });
       if (claim) {
         try {
-          const rows = await evaluate(b.id, claim.d, claim.version);
+          const rows = await evaluate(
+            b.id,
+            claim.d,
+            claim.version,
+            claim.token,
+          );
           await change((s) => {
             const r = s.runs.find((x) => x.id === b.id)!;
             if (r.token !== claim.token) return;
@@ -221,11 +227,7 @@ export async function POST(req: NextRequest) {
     } else if (b.op === "retry" || b.op === "cancel") {
       await change((s) => {
         const r = s.runs.find((x) => x.id === b.id)!;
-        if (b.op === "retry" && ["failed", "cancelled"].includes(r.status)) {
-          r.status = "queued";
-          r.cancel = false;
-          r.error = "";
-        }
+        if (b.op === "retry") retryRun(r, b.attempt);
         if (b.op === "cancel") {
           r.cancel = true;
           if (r.status === "queued") r.status = "cancelled";

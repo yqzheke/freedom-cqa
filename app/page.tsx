@@ -393,7 +393,13 @@ export default function Workspace() {
                             <button
                               className="primary"
                               disabled={busy}
-                              onClick={() => act({ op: "retry", id: r.id })}
+                              onClick={() =>
+                                act({
+                                  op: "retry",
+                                  id: r.id,
+                                  attempt: r.attempt ?? 0,
+                                })
+                              }
                             >
                               Повторить оценку
                             </button>
@@ -625,7 +631,15 @@ export default function Workspace() {
                       </button>
                     ) : (
                       ["failed", "cancelled"].includes(k.status) && (
-                        <button onClick={() => act({ op: "retry", id: k.id })}>
+                        <button
+                          onClick={() =>
+                            act({
+                              op: "retry",
+                              id: k.id,
+                              attempt: k.attempt ?? 0,
+                            })
+                          }
+                        >
                           Повторить
                         </button>
                       )
@@ -634,7 +648,12 @@ export default function Workspace() {
                       .filter((x) => x.run === k.id)
                       .map((x) => (
                         <p key={x.id}>
-                          {x.model} · {x.status} ·{" "}
+                          {x.attempt !== undefined && (
+                            <>
+                              Попытка {x.attempt + 1} · {x.stage} ·{" "}
+                            </>
+                          )}
+                          {x.model} · {x.status} {x.diagnostic} ·{" "}
                           {x.cost === null
                             ? "Стоимость неизвестна"
                             : "$" + x.cost.toFixed(6)}

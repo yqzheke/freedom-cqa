@@ -150,14 +150,15 @@ export function validateEvidence(d: Dialogue, c: Criterion, f: Finding) {
     const m = d.transcript[e.from - 1];
     if (!m || e.to < e.from || e.to > d.transcript.length)
       throw Error("Неверный диапазон");
-    if (
-      e.quote
-        ? e.from !== e.to ||
-          !["operator", "system"].includes(m.speaker) ||
-          !m.text.includes(e.quote)
-        : !e.expected.trim()
-    )
-      throw Error("Недостоверная цитата или описание пропуска");
+    if (e.quote) {
+      if (e.from !== e.to)
+        throw Error("Цитата должна ссылаться на одну реплику");
+      if (f.status !== "na" && !["operator", "system"].includes(m.speaker))
+        throw Error("Источник цитаты не подтверждает действие оператора");
+      if (!m.text.includes(e.quote))
+        throw Error("Цитата не найдена в указанной реплике");
+    } else if (!e.expected.trim())
+      throw Error("Не указано ожидаемое действие для диапазона");
   }
 }
 export function calculate(r: Rubric, answers: Finding[]) {

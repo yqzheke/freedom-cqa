@@ -96,3 +96,19 @@ describe("official chat checklist", () => {
     ).toBe(false);
   });
 });
+it("allows exact client context for NA and rejects it as proof of operator performance", () => {
+  const d = seed().docs[0].data,
+    c = official.criteria[1];
+  const f: Finding = {
+    id: c.id,
+    status: "na",
+    answer: null,
+    critical: false,
+    reason: "test",
+    evidence: [{ from: 1, to: 1, quote: d.transcript[0].text, expected: "" }],
+  };
+  validateEvidence(d, c, f);
+  expect(() =>
+    validateEvidence(d, c, { ...f, status: "applicable", answer: true }),
+  ).toThrow("Источник цитаты");
+});
