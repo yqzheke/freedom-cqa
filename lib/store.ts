@@ -15,6 +15,7 @@ export const hash = (o: unknown) =>
 export type Doc = { id: string; group: string; data: Dialogue };
 export type Version = { id: string; r: Rubric };
 export type Run = {
+  textProvider?: "gemini" | "groq";
   review?: import("./review").Reassessment;
   reviewRevision?: number;
   repairReason?: string;
@@ -54,6 +55,7 @@ export type Appeal = {
   revision: number;
 };
 export type Call = {
+  provider?: "gemini" | "groq";
   attempt?: number;
   stage?: "text" | "repair" | "audio";
   leaseToken?: string;

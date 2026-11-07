@@ -1,3 +1,4 @@
+import { configuredProvider, groqModel } from "../../../lib/groq";
 import {
   recordDecision,
   prepareReview,
@@ -59,6 +60,7 @@ export async function GET(req: NextRequest) {
     {
       ...s,
       imports: undefined,
+      textProvider: configuredProvider(),
       docs: s.docs.map((d) => ({
         ...d,
         data: { ...d.data, audio_url: d.data.audio_url ? "available" : null },
@@ -146,16 +148,22 @@ export async function POST(req: NextRequest) {
           !s.versions.some((x) => x.id === b.version)
         )
           throw Error("Версия недоступна");
+        const textProvider =
+          s.docs.find((x) => x.id === b.doc)!.data.channel === "agent chat"
+            ? configuredProvider()
+            : "gemini";
         const key = hash([
           b.doc,
           b.version,
           process.env.GEMINI_TEXT_MODEL,
           process.env.GEMINI_AUDIO_MODEL,
           "v1",
+          ...(textProvider === "groq" ? ["groq", groqModel] : []),
         ]);
         if (!s.runs.some((x) => x.key === key))
           s.runs.push({
             key,
+            textProvider,
             id: crypto.randomUUID(),
             doc: b.doc,
             version: b.version,

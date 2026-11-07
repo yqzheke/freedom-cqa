@@ -105,7 +105,9 @@ function Answer({
   );
 }
 export default function Workspace() {
-  const [s, set] = useState<State | null>(null),
+  const [s, set] = useState<
+      (State & { textProvider: "gemini" | "groq" }) | null
+    >(null),
     [tab, nav] = useState("Диалоги"),
     [doc, select] = useState(""),
     [ver, version] = useState(""),
@@ -166,7 +168,14 @@ export default function Workspace() {
   }
   const d = s?.docs.find((x) => x.id === doc),
     v = s?.versions.find((x) => x.id === ver),
-    r = s?.runs.find((x) => !x.review && x.doc === doc && x.version === ver),
+    r = s?.runs.find(
+      (x) =>
+        !x.review &&
+        (x.textProvider ?? "gemini") ===
+          (d?.data.channel === "agent chat" ? s.textProvider : "gemini") &&
+        x.doc === doc &&
+        x.version === ver,
+    ),
     total = v && r ? calculate(v.r, r.current) : null;
   function evidence(from: number, to: number) {
     mark([from, to]);
@@ -299,7 +308,14 @@ export default function Workspace() {
                     </div>
                     {visible.map((x) => {
                       const run = s.runs.find(
-                        (k) => !k.review && k.doc === x.id && k.version === ver,
+                        (k) =>
+                          !k.review &&
+                          (k.textProvider ?? "gemini") ===
+                            (x.data.channel === "agent chat"
+                              ? s.textProvider
+                              : "gemini") &&
+                          k.doc === x.id &&
+                          k.version === ver,
                       );
                       const score =
                         run && v ? calculate(v.r, run.current) : null;
@@ -372,6 +388,12 @@ export default function Workspace() {
                   )}
                   <section>
                     <h2>Оценка оператора</h2>
+                    <small>
+                      {d?.data.channel === "agent chat" &&
+                      s.textProvider === "groq"
+                        ? "Groq"
+                        : "Gemini"}
+                    </small>
                     {!r ? (
                       <button
                         className="primary"
@@ -624,6 +646,11 @@ export default function Workspace() {
                       .filter(
                         (r) =>
                           !r.review &&
+                          (r.textProvider ?? "gemini") ===
+                            (s.docs.find((d) => d.id === r.doc)?.data
+                              .channel === "agent chat"
+                              ? s.textProvider
+                              : "gemini") &&
                           r.version === ver &&
                           r.status === "completed",
                       )

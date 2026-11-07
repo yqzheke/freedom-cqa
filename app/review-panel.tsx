@@ -43,7 +43,8 @@ export function ReviewPanel({
           disabled={busy}
           onClick={() => act({ op: "requestReview", id: appeal.id })}
         >
-          Разрешить повторную оценку Gemini
+          Разрешить повторную оценку{" "}
+          {parent.textProvider === "groq" ? "Groq" : "Gemini"}
         </button>
       )}
       {job && review && (
@@ -58,7 +59,8 @@ export function ReviewPanel({
                 act({ op: "retry", id: job.id, attempt: job.attempt ?? 0 })
               }
             >
-              Повторить запрос Gemini
+              Повторить запрос{" "}
+              {parent.textProvider === "groq" ? "Groq" : "Gemini"}
             </button>
           )}
           {review.errors?.length ? (

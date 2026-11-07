@@ -16,6 +16,7 @@ export default defineConfig({
     env: {
       CQA_TEST_STATE_DIR: dir,
       GEMINI_API_KEY: "",
+      TEXT_EVALUATION_PROVIDER: "gemini",
       SUPABASE_URL: "",
       DEMO_ACCESS_TOKEN: "",
     },

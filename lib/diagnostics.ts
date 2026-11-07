@@ -12,8 +12,11 @@ export function retryRun(run: Run, expected: unknown) {
 }
 export class ValidationFailure extends Error {}
 export class HttpFailure extends Error {
-  constructor(readonly status: number) {
-    super("Ошибка Gemini: HTTP " + status);
+  constructor(
+    readonly status: number,
+    provider: "Gemini" | "Groq" = "Gemini",
+  ) {
+    super("Ошибка " + provider + ": HTTP " + status);
   }
 }
 export function schemaLocation(path: PropertyKey[]) {

@@ -1,3 +1,4 @@
+import { groqModel, groqText, localGroqKey } from "./groq";
 import { isDeepStrictEqual } from "node:util";
 import { HttpFailure, ValidationFailure, schemaLocation } from "./diagnostics";
 import {
@@ -6,7 +7,7 @@ import {
   quotaMessage,
   limitMessage,
 } from "./free-tier";
-import { GeminiRateLimit } from "./gemini";
+
 import { generate, generatedJSON, usage, defaultModel } from "./gemini";
 import { z } from "zod";
 import { decode } from "html-entities";
@@ -102,10 +103,15 @@ export async function billed<T>(
     audio: number;
     raw: unknown;
   },
-  context?: { token: string; stage: "audio" | "repair" | "text" },
+  context?: {
+    provider?: "groq" | "gemini";
+    token: string;
+    stage: "audio" | "repair" | "text";
+  },
   validate?: (value: T) => void,
 ) {
-  const free = freePolicy(model);
+  const provider = context?.provider ?? "gemini";
+  const free = freePolicy(model, provider);
   const prices = free
     ? { input: 0, output: 0, audio: 0, cached: 0 }
     : JSON.parse(process.env.MODEL_PRICES_JSON || "{}")[model];
@@ -133,11 +139,12 @@ export async function billed<T>(
     usage: null,
     date: new Date().toISOString(),
     mode: free ? "free_only" : undefined,
+    provider,
     pricing: JSON.stringify(prices),
   };
   const paused = await change((s) => {
     if (s.queuePause) return s.queuePause;
-    if (free && quotaReached(s, free.cap, entry.date))
+    if (free && quotaReached(s, free.cap, entry.date, provider))
       return (s.queuePause = limitMessage);
     if (
       !free &&
@@ -182,12 +189,12 @@ export async function billed<T>(
         ? error.message
         : error instanceof Error &&
             ["TimeoutError", "AbortError"].includes(error.name)
-          ? "Истекло время ожидания Gemini"
-          : "Ошибка соединения с Gemini";
+          ? "Истекло время ожидания " + provider
+          : "Ошибка соединения с " + provider;
     await change((s) => {
       const row = s.calls.find((c) => c.id === entry.id)!;
       row.status =
-        error instanceof GeminiRateLimit
+        error instanceof HttpFailure && error.status === 429
           ? "rate_limited"
           : error instanceof HttpFailure
             ? "http_error"
@@ -195,7 +202,11 @@ export async function billed<T>(
               ? "invalid_response"
               : "unknown";
       row.diagnostic = diagnostic;
-      if (error instanceof GeminiRateLimit) s.queuePause = quotaMessage;
+      if (error instanceof HttpFailure && error.status === 429)
+        s.queuePause =
+          provider === "groq"
+            ? quotaMessage.replace("Gemini", "Groq")
+            : quotaMessage;
     });
     throw Error(diagnostic);
   }
@@ -239,14 +250,18 @@ export async function evaluate(
   r: Rubric,
   token: string,
 ) {
-  if (!process.env.GEMINI_API_KEY) throw Error("Требуется GEMINI_API_KEY");
+  const saved = (await state()).runs.find((x) => x.id === run);
+  const provider =
+    d.channel === "agent chat" ? (saved?.textProvider ?? "gemini") : "gemini";
+  if (provider === "gemini" && !process.env.GEMINI_API_KEY)
+    throw Error("Требуется GEMINI_API_KEY");
 
   if (
-    process.env.GEMINI_BILLING_MODE === "free_only" &&
+    (provider === "groq" || process.env.GEMINI_BILLING_MODE === "free_only") &&
     !seed().docs.some((example) => isDeepStrictEqual(example.data, d))
   )
     throw Error(
-      "Gemini Free разрешён только для встроенных синтетических диалогов",
+      "Бесплатная оценка разрешена только для встроенных синтетических диалогов",
     );
   const review = (await state()).runs.find((x) => x.id === run)?.review;
   let observations = "";
@@ -347,7 +362,11 @@ export async function evaluate(
   }
   if ((await state()).runs.find((x) => x.id === run)?.cancel)
     throw Error("Оценка отменена");
-  const model = process.env.GEMINI_TEXT_MODEL || defaultModel;
+  const model =
+    provider === "groq"
+      ? groqModel
+      : process.env.GEMINI_TEXT_MODEL || defaultModel;
+  const key = provider === "groq" ? await localGroqKey() : "";
   async function textStage(repair: string) {
     const contract = z.object({ results: z.array(finding) });
     const schema = z.toJSONSchema(contract, { target: "draft-2020-12" });
@@ -356,36 +375,39 @@ export async function evaluate(
     await billed(
       run,
       model,
-      () =>
-        generate(
-          model,
+      async () => {
+        const instruction =
           system +
-            " Respond using the supplied schema. In post-appeal review consider the supplied human decisions and reasons as context. Independently assess every criterion, including locked criteria, so disagreement can be reviewed. For acoustic criteria rely on attributable acoustic observations. For an absent act inspect and reference the relevant range. Do not invent quotes.",
-          [
-            {
-              text: JSON.stringify({
-                criteria: r.criteria,
-                repair,
-                review: review
-                  ? {
-                      humanDecisions: review.locks,
-                      previousFindings: review.baseline,
-                    }
-                  : undefined,
-                language: d.language,
-                channel: d.channel,
-                transcript: d.transcript,
-                observations,
-              }),
-            },
-          ],
+          " Respond using the supplied schema. In post-appeal review consider the supplied human decisions and reasons as context. Independently assess every criterion, including locked criteria, so disagreement can be reviewed. For acoustic criteria rely on attributable acoustic observations. For an absent act inspect and reference the relevant range. Do not invent quotes.";
+        const input = JSON.stringify({
+          criteria: r.criteria,
+          repair,
+          review: review
+            ? {
+                humanDecisions: review.locks,
+                previousFindings: review.baseline,
+              }
+            : undefined,
+          language: d.language,
+          channel: d.channel,
+          transcript: d.transcript,
+          observations,
+        });
+        if (provider === "groq")
+          return groqText(key, model, instruction, input, schema);
+        const response = await generate(
+          model,
+          instruction,
+          [{ text: input }],
           8000,
           schema,
-        ),
-      usage,
-      { stage: repair ? "repair" : "text", token },
+        );
+        return { usage: usage(response), read: () => generatedJSON(response) };
+      },
+      (v) => v.usage,
+      { stage: repair ? "repair" : "text", token, provider },
       (result) => {
-        const checked = contract.safeParse(generatedJSON(result));
+        const checked = contract.safeParse(result.read());
         if (!checked.success)
           throw new ValidationFailure(
             "Неверная структура: " +
