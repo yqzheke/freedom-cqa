@@ -111,12 +111,33 @@ export const finding = z.object({
 });
 export type Finding = z.infer<typeof finding>;
 export function normalized(c: Criterion, f: Finding) {
-  if (f.critical && !c.critical) throw Error("Критическая ошибка не настроена");
+  const answerType = f.answer === null ? "null" : typeof f.answer;
   if (f.status !== "applicable") {
-    if (f.answer !== null || f.critical || (f.status === "na" && !c.na.trim()))
-      throw Error("Недопустимый статус");
+    const problems: string[] = [];
+    if (f.status === "na" && !c.na.trim())
+      problems.push("NA_FORBIDDEN: чек-лист запрещает N/A");
+    if (f.answer !== null)
+      problems.push("ANSWER_MUST_BE_NULL: тип ответа " + answerType);
+    if (f.critical) problems.push("CRITICAL_MUST_BE_FALSE");
+    if (problems.length)
+      throw Error("Статус " + f.status + " · " + problems.join(" · "));
     return null;
   }
+  if (f.critical && !c.critical)
+    throw Error("CRITICAL_FORBIDDEN: флаг критической ошибки не настроен");
+  const expectedType =
+    c.mapping.kind === "choice"
+      ? "string"
+      : c.mapping.kind === "number"
+        ? "number"
+        : "boolean";
+  if (answerType !== expectedType)
+    throw Error(
+      "ANSWER_TYPE: для applicable ожидается " +
+        expectedType +
+        ", получен " +
+        answerType,
+    );
   const m = c.mapping,
     a = f.answer;
   if (m.kind === "boolean" && typeof a === "boolean")
@@ -137,7 +158,11 @@ export function normalized(c: Criterion, f: Finding) {
     const v = new Decimal(a).minus(m.min).div(new Decimal(m.max).minus(m.min));
     return m.descending ? new Decimal(1).minus(v) : v;
   }
-  throw Error("Ответ вне шкалы");
+  throw Error(
+    m.kind === "choice"
+      ? "CHOICE_NOT_ALLOWED: вариант отсутствует в чек-листе"
+      : "NUMBER_NOT_ALLOWED: значение вне шкалы или допустимых ступеней",
+  );
 }
 export function validateEvidence(d: Dialogue, c: Criterion, f: Finding) {
   normalized(c, f);
