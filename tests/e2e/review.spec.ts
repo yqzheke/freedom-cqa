@@ -54,9 +54,21 @@ test("review a synthetic stored machine finding and preserve original on reload"
     .selectOption("false");
   await page.getByRole("button", { name: "Изменить оценку" }).click();
   await expect(page.getByText("replace · Тестовая замена")).toBeVisible();
+  await expect(
+    page.getByText(/Зафиксированный ответ проверяющего: false/),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Разрешить повторную оценку Gemini" })
+    .click();
+  await expect(
+    page.getByText(/Повторная оценка: failed.*GEMINI_API_KEY/),
+  ).toBeVisible();
   await page.reload();
   await page.getByLabel("Версия чек-листа").selectOption("demo-v1");
   await expect(
     page.getByText("Исходная оценка: 100 · Итоговая: 40"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Рекомендации оператору" }),
   ).toBeVisible();
 });

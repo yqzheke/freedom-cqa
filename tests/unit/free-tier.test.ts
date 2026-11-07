@@ -172,3 +172,94 @@ it("rejects a delayed retry even if the next attempt has already failed", async 
   });
   expect(fetch).not.toHaveBeenCalled();
 });
+it("rejects imported conversations in free mode before any provider call", async () => {
+  const { state } = await jobFixture();
+  const { evaluate } = await import("../../lib/provider");
+  const s = await state();
+  await expect(
+    evaluate(
+      "job",
+      {
+        ...s.docs[0].data,
+        transcript: [
+          {
+            speaker: "operator",
+            timestamp: "00:00",
+            text: "synthetic external fixture",
+          },
+        ],
+      },
+      s.versions[0].r,
+      "first",
+    ),
+  ).rejects.toThrow(/синтетических/);
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("sends reviewer context only in the authorized reassessment and retains the human outcome on HTTP failure", async () => {
+  const { change, state } = await jobFixture();
+  const { recordDecision } = await import("../../lib/review");
+  const { POST } = await import("../../app/api/workspace/route");
+  const { NextRequest } = await import("next/server");
+  vi.stubEnv("DEMO_ACCESS_TOKEN", "");
+  vi.stubEnv("VERCEL", "");
+  const id = await change((s) => {
+    const parent = s.runs[0],
+      rubric = s.versions[0],
+      doc = s.docs[0];
+    parent.doc = doc.id;
+    parent.version = rubric.id;
+    parent.status = "completed";
+    parent.original = rubric.r.criteria.map((c) => ({
+      id: c.id,
+      status: "applicable",
+      answer: true,
+      critical: false,
+      reason: "synthetic",
+      evidence: [
+        { from: 2, to: 2, quote: doc.data.transcript[1].text, expected: "" },
+      ],
+    }));
+    parent.current = structuredClone(parent.original);
+    parent.current[0].answer = false;
+    const a = {
+      id: "appeal",
+      run: parent.id,
+      criterion: parent.current[0].id,
+      comment: "synthetic",
+      action: "replace",
+      reason: "fixture human reason",
+      revision: 0,
+    };
+    s.appeals.push(a);
+    recordDecision(s, a);
+    return s.runs[1].id;
+  });
+  const post = (body: object) =>
+    POST(
+      new NextRequest("http://127.0.0.1/api/workspace", {
+        method: "POST",
+        headers: { host: "127.0.0.1", origin: "http://127.0.0.1" },
+        body: JSON.stringify(body),
+      }),
+    );
+  expect((await post({ op: "step", id })).status).toBe(200);
+  expect(fetch).not.toHaveBeenCalled();
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response("ignored", { status: 503 }),
+  );
+  await post({ op: "requestReview", id: "appeal" });
+  await post({ op: "step", id });
+  const s = await state();
+  expect(s.runs[1].status).toBe("failed");
+  expect(s.runs[1].review?.errors?.[0].message).toContain("503");
+  expect(s.runs[0].current[0].answer).toBe(false);
+  expect(s.runs[0].original[0].answer).toBe(true);
+  expect(s.appeals[0].reason).toBe("fixture human reason");
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+  const context = JSON.parse(body.contents[0].parts[0].text);
+  expect(context.review.humanDecisions[0]).toMatchObject({
+    answer: false,
+    reason: "fixture human reason",
+  });
+});

@@ -1,3 +1,8 @@
+import {
+  recordDecision,
+  prepareReview,
+  resolveReview,
+} from "../../../lib/review";
 import { retryRun } from "../../../lib/diagnostics";
 import { mediaResponse } from "../../../lib/media";
 import { NextRequest, NextResponse } from "next/server";
@@ -5,13 +10,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { z } from "zod";
 import { state, change, hash } from "../../../lib/store";
-import {
-  rubric,
-  envelope,
-  normalized,
-  finding,
-  calculate,
-} from "../../../lib/domain";
+import { rubric, envelope, normalized, finding } from "../../../lib/domain";
 import { evaluate, audioBytes } from "../../../lib/provider";
 export const runtime = "nodejs",
   maxDuration = 240,
@@ -220,6 +219,11 @@ export async function POST(req: NextRequest) {
               r.status = r.cancel ? "cancelled" : "failed";
               if (s.queuePause && !r.cancel) r.status = "queued";
               r.error = s.queuePause ?? safe(e);
+              if (r.review)
+                (r.review.errors ??= []).push({
+                  at: new Date().toISOString(),
+                  message: r.error,
+                });
             }
           });
         }
@@ -237,7 +241,7 @@ export async function POST(req: NextRequest) {
       const comment = z.string().trim().min(1).max(4000).parse(b.comment);
       await change((s) => {
         const r = s.runs.find((x) => x.id === b.run);
-        if (!r?.current.some((x) => x.id === b.criterion))
+        if (r?.review || !r?.current.some((x) => x.id === b.criterion))
           throw Error("Оценка недоступна");
         if (
           s.appeals.some(
@@ -268,6 +272,8 @@ export async function POST(req: NextRequest) {
         const r = s.runs.find((x) => x.id === a.run)!,
           v = s.versions.find((x) => x.id === r.version)!.r,
           i = r.current.findIndex((x) => x.id === a.criterion);
+        if ((b.parentRevision ?? 0) !== (r.reviewRevision ?? 0))
+          throw Error("Конфликт: оценка была изменена");
         a.previous = structuredClone(r.current[i]);
         a.action = z.enum(["uphold", "replace"]).parse(b.action);
         a.reason = reason;
@@ -283,10 +289,28 @@ export async function POST(req: NextRequest) {
             v.criteria.find((c) => c.id === a.criterion)!,
             f,
           );
+          if (v.criteria.find((c) => c.id === a.criterion)?.flagFromAnswer)
+            f.critical = f.answer === true;
           r.current[i] = f;
           a.replacement = f;
         }
-        calculate(v, r.current);
+        recordDecision(s, a);
+      });
+    } else if (b.op === "requestReview") {
+      await change((s) => {
+        const a = s.appeals.find((a) => a.id === b.id);
+        if (!a) throw Error("Апелляция недоступна");
+        const job = prepareReview(s, a);
+        const parent = s.runs.find((r) => r.id === a.run)!;
+        if (job.review!.revision !== (parent.reviewRevision ?? 0))
+          throw Error("Конфликт: решение устарело");
+        if (job.status === "awaiting_permission") job.status = "queued";
+      });
+    } else if (b.op === "resolveReview") {
+      await change((s) => {
+        const job = s.runs.find((r) => r.id === b.id);
+        if (!job) throw Error("Оценка недоступна");
+        resolveReview(s, job, z.enum(["accepted", "rejected"]).parse(b.action));
       });
     } else return error("Неизвестное действие");
     return NextResponse.json({ ok: true });

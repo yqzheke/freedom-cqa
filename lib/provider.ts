@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { HttpFailure, ValidationFailure, schemaLocation } from "./diagnostics";
 import {
   freePolicy,
@@ -19,7 +20,7 @@ import {
   type Dialogue,
   type Rubric,
 } from "./domain";
-import { change, hash, state, type Call } from "./store";
+import { change, hash, state, seed, type Call } from "./store";
 export async function audioBytes(
   address: string,
   player = true,
@@ -240,6 +241,14 @@ export async function evaluate(
 ) {
   if (!process.env.GEMINI_API_KEY) throw Error("Требуется GEMINI_API_KEY");
 
+  if (
+    process.env.GEMINI_BILLING_MODE === "free_only" &&
+    !seed().docs.some((example) => isDeepStrictEqual(example.data, d))
+  )
+    throw Error(
+      "Gemini Free разрешён только для встроенных синтетических диалогов",
+    );
+  const review = (await state()).runs.find((x) => x.id === run)?.review;
   let observations = "";
   let duration = 0;
   const stored = (await state()).runs.find((x) => x.id === run)?.audio;
@@ -351,12 +360,18 @@ export async function evaluate(
         generate(
           model,
           system +
-            " Respond using the supplied schema. For acoustic criteria rely on attributable acoustic observations. For an absent act inspect and reference the relevant range. Do not invent quotes.",
+            " Respond using the supplied schema. In post-appeal review consider the supplied human decisions and reasons as context. Independently assess every criterion, including locked criteria, so disagreement can be reviewed. For acoustic criteria rely on attributable acoustic observations. For an absent act inspect and reference the relevant range. Do not invent quotes.",
           [
             {
               text: JSON.stringify({
                 criteria: r.criteria,
                 repair,
+                review: review
+                  ? {
+                      humanDecisions: review.locks,
+                      previousFindings: review.baseline,
+                    }
+                  : undefined,
                 language: d.language,
                 channel: d.channel,
                 transcript: d.transcript,

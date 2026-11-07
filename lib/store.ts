@@ -15,6 +15,8 @@ export const hash = (o: unknown) =>
 export type Doc = { id: string; group: string; data: Dialogue };
 export type Version = { id: string; r: Rubric };
 export type Run = {
+  review?: import("./review").Reassessment;
+  reviewRevision?: number;
   repairReason?: string;
   attempt?: number;
   audio?: {
@@ -37,6 +39,10 @@ export type Run = {
   created: string;
 };
 export type Appeal = {
+  human?: Finding;
+  decidedAt?: string;
+  after?: Finding[];
+  total?: ReturnType<typeof import("./domain").calculate>;
   id: string;
   run: string;
   criterion: string;

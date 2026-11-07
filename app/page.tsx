@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { Observations } from "./observations";
+import { ReviewPanel } from "./review-panel";
+import { recommendations } from "../lib/review";
 import { Editor } from "./editor";
 import { calculate, type Finding, type Criterion } from "../lib/domain";
 import type { State } from "../lib/store";
@@ -164,7 +166,7 @@ export default function Workspace() {
   }
   const d = s?.docs.find((x) => x.id === doc),
     v = s?.versions.find((x) => x.id === ver),
-    r = s?.runs.find((x) => x.doc === doc && x.version === ver),
+    r = s?.runs.find((x) => !x.review && x.doc === doc && x.version === ver),
     total = v && r ? calculate(v.r, r.current) : null;
   function evidence(from: number, to: number) {
     mark([from, to]);
@@ -297,7 +299,7 @@ export default function Workspace() {
                     </div>
                     {visible.map((x) => {
                       const run = s.runs.find(
-                        (k) => k.doc === x.id && k.version === ver,
+                        (k) => !k.review && k.doc === x.id && k.version === ver,
                       );
                       const score =
                         run && v ? calculate(v.r, run.current) : null;
@@ -429,6 +431,33 @@ export default function Workspace() {
                                 </small>
                               ),
                             )}
+                            {d &&
+                              recommendations(v.r, r.current, d.data).length >
+                                0 && (
+                                <section>
+                                  <h3>Рекомендации оператору</h3>
+                                  {recommendations(v.r, r.current, d.data).map(
+                                    (t) => (
+                                      <article key={t.id}>
+                                        <strong>{t.title}</strong>
+                                        <p>{t.tip}</p>
+                                        {t.evidence.map((e, i) => (
+                                          <button
+                                            className="evidence"
+                                            key={i}
+                                            onClick={() =>
+                                              evidence(e.from, e.to)
+                                            }
+                                          >
+                                            #{e.from}–{e.to}{" "}
+                                            {e.quote || e.expected}
+                                          </button>
+                                        ))}
+                                      </article>
+                                    ),
+                                  )}
+                                </section>
+                              )}
                             {r.current.map((f, i) => {
                               const c = v.r.criteria.find(
                                   (x) => x.id === f.id,
@@ -541,9 +570,16 @@ export default function Workspace() {
                       ))}
                       <p>Обращение: {a.comment}</p>
                       {a.action ? (
-                        <p>
-                          {a.action} · {a.reason}
-                        </p>
+                        <ReviewPanel
+                          appeal={a}
+                          parent={run}
+                          rubric={
+                            s.versions.find((v) => v.id === run.version)!.r
+                          }
+                          job={s.runs.find((j) => j.review?.appeal === a.id)}
+                          act={act}
+                          busy={busy}
+                        />
                       ) : (
                         <Answer
                           c={c}
@@ -555,6 +591,7 @@ export default function Workspace() {
                               action,
                               reason,
                               answer,
+                              parentRevision: run.reviewRevision ?? 0,
                               revision: s.appeals.filter(
                                 (x) => x.run === run.id && x.action,
                               ).length,
@@ -585,7 +622,10 @@ export default function Workspace() {
                   onClick={() => {
                     const rows = s.runs
                       .filter(
-                        (r) => r.version === ver && r.status === "completed",
+                        (r) =>
+                          !r.review &&
+                          r.version === ver &&
+                          r.status === "completed",
                       )
                       .map((r) => ({
                         conversation_id: s.docs.find((x) => x.id === r.doc)!
@@ -622,6 +662,7 @@ export default function Workspace() {
                       {s.docs.find((x) => x.id === k.doc)?.data.conversation_id}
                     </h3>
                     <small>
+                      {k.review ? "Пересмотр после апелляции · " : ""}
                       {k.created} · {k.status}
                     </small>
                     <p>{k.error}</p>
